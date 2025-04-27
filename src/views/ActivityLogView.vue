@@ -1,7 +1,7 @@
 <template>
   <div class="activity-log">
     <div class="header">
-      <h1 style="margin-bottom: 0px; margin-top: 0px;">Hello there, Powerpuff!</h1>
+      <h1 style="margin-bottom: 0px; margin-top: 0px;">Hello there!</h1>
     </div>
     <hr style="border: 1px solid #eee; margin-bottom: 5px;">
     <div style="display: flex; justify-content: space-around; background-color: #f9f9f9; padding: 20px; border-radius: 4px;">
@@ -34,7 +34,7 @@
       </div>
     </div>
 
-    <div class="tabs" v-if="!selectedStudent">
+    <div class="tabs" v-if="!selectedViolation">
       <button :class="{ active: activeTab === 'settled' }" @click="activeTab = 'settled'">Settled Violations</button>
       <button :class="{ active: activeTab === 'unsettled' }" @click="activeTab = 'unsettled'">Unsettled Violations</button>
       <select class="filter-category" v-model="sortBy">
@@ -42,11 +42,12 @@
         <option value="dateAsc">Oldest</option>
         <option value="nameAsc">Name (A-Z)</option>
         <option value="nameDesc">Name (Z-A)</option>
-        <option value="studentId">Student ID</option>
       </select>
     </div>
 
-    <table v-if="!selectedStudent">
+    <div v-if="loading">Loading activity log...</div>
+    <div v-else-if="error">Error loading activity log: {{ error }}</div>
+    <table v-else-if="!selectedViolation">
       <thead>
         <tr>
           <th>Student Name</th>
@@ -57,19 +58,19 @@
         </tr>
       </thead>
       <tbody>
-        <tr v-for="student in filteredStudents" :key="student.studentId">
+        <tr v-for="violation in filteredViolations" :key="violation.id">
           <td>
             <div class="student-name-cell">
-              {{ student.studentName }}
+              {{ violation.students?.student_name }}
             </div>
           </td>
-          <td>{{ student.studentId }}</td>
-          <td>{{ student.violation }}</td>
-          <td>{{ student.date }}</td>
+          <td>{{ violation.students?.student_id }}</td>
+          <td>{{ violation.violation_categories?.name }}</td>
+          <td>{{ violation.date_recorded }}</td>
           <td style="text-align: right;">
             <button
               class="view-details-button"
-              @click="showDetails(student)"
+              @click="showDetails(violation)"
             >
               View Details
             </button>
@@ -77,8 +78,9 @@
         </tr>
       </tbody>
     </table>
+    <p v-else-if="!violations.length && !loading && !error && !selectedViolation">No activity found.</p>
 
-    <div v-if="selectedStudent" class="violation-details-full">
+    <div v-if="selectedViolation" class="violation-details-full">
       <h2>Violation Details</h2>
       <div class="details-container">
         <div class="details-image">
@@ -86,20 +88,24 @@
             src="@/assets/studentpic.png"
             alt="Student Image"
             style="max-width: 250px; border-radius: 4px; cursor: zoom-in; margin-left: 1cm; margin-top: 0.5cm;"
-            @click="showModal(selectedStudent)"
+            @click="showModal(selectedViolation.students)"
           />
         </div>
         <div class="details-text" style="font-size: medium;">
-          <p><strong>Student Name:</strong> {{ selectedStudent.studentName }}</p>
-          <p><strong>Student ID:</strong> {{ selectedStudent.studentId }}</p>
-          <p><strong>Violation:</strong> {{ selectedStudent.violation }}</p>
-          <p><strong>Frequency:</strong> 1</p>
-          <p><strong>Status:</strong> {{ selectedStudent.status }}</p>
-          <p><strong>Date Recorded:</strong> {{ selectedStudent.date }}</p>
-          <p v-if="selectedStudent.settledDate"><strong>Date Settled:</strong> {{ selectedStudent.settledDate }}</p>
-          <p v-if="selectedStudent.dueDate"><strong>Due Date:</strong> {{ selectedStudent.dueDate }}</p>
+          <p><strong>Student Name:</strong> {{ selectedViolation.students?.student_name }}</p>
+          <p><strong>Student ID:</strong> {{ selectedViolation.students?.student_id }}</p>
+          <p><strong>Violation:</strong> {{ selectedViolation.violation_categories?.name }}</p>
+          <p><strong>Frequency:</strong> {{ selectedViolation.frequency }}</p>
+          <p><strong>Status:</strong> {{ selectedViolation.status }}</p>
+          <p><strong>Date Recorded:</strong> {{ selectedViolation.date_recorded }}</p>
+          <p v-if="selectedViolation.status === 'settled' && selectedViolation.date_settled">
+            <strong>Date Settled:</strong> {{ selectedViolation.date_settled }}
+          </p>
+          <p v-if="selectedViolation.status === 'unsettled' && selectedViolation.due_date">
+            <strong>Due Date:</strong> {{ selectedViolation.due_date }}
+          </p>
           <div style="text-align:left; margin-top: 50px;">
-            <button class="return-button" @click="selectedStudent = null">Return to List</button>
+            <button class="return-button" @click="selectedViolation = null">Return to List</button>
           </div>
         </div>
       </div>
@@ -115,25 +121,35 @@
 </template>
 
 <script>
+import supabase from '@/components/Supabase'; // Ensure this path is correct
+
 export default {
   data() {
     return {
+      loading: false,
+      error: null,
+      violations: [],
       activeTab: 'settled',
-      students: [],
       searchQuery: '',
       sortBy: 'dateDesc',
-      selectedStudent: null,
+      selectedViolation: null, // Renamed from selectedStudent for clarity
       isModalVisible: false,
       modalImageUrl: '',
     };
   },
   computed: {
-    filteredStudents() {
-      let filtered = this.students.filter(student => {
+    filteredViolations() {
+      let filtered = this.violations.filter(violation => {
+        const studentName = violation.students?.student_name?.toLowerCase() || '';
+        const violationName = violation.violation_categories?.name?.toLowerCase() || '';
+        const searchText = this.searchQuery.toLowerCase();
+
+        const matchesSearch = studentName.includes(searchText) || violationName.includes(searchText);
+
         if (this.activeTab === 'settled') {
-          return student.status === 'Settled' && student.studentName.toLowerCase().includes(this.searchQuery.toLowerCase());
+          return violation.status === 'settled' && matchesSearch;
         } else {
-          return student.status === 'Unsettled' && student.studentName.toLowerCase().includes(this.searchQuery.toLowerCase());
+          return violation.status === 'unsettled' && matchesSearch;
         }
       });
 
@@ -142,26 +158,61 @@ export default {
       sorted.sort((a, b) => {
         switch (this.sortBy) {
           case 'nameAsc':
-            return a.studentName.localeCompare(b.studentName);
+            return a.students?.student_name?.localeCompare(b.students?.student_name);
           case 'nameDesc':
-            return b.studentName.localeCompare(a.studentName);
-          case 'studentId':
-            return String(a.studentId).localeCompare(String(b.studentId));
-          case 'email':
-            return a.email.localeCompare(b.email);
+            return b.students?.student_name?.localeCompare(a.students?.student_name);
           case 'dateAsc':
-            return new Date(a.date) - new Date(b.date);
+            return new Date(a.date_recorded) - new Date(b.date_recorded);
           case 'dateDesc':
           default:
-            return new Date(b.date) - new Date(a.date);
+            return new Date(b.date_recorded) - new Date(a.date_recorded);
         }
       });
       return sorted;
     },
   },
+  async mounted() {
+    await this.fetchActivityLog();
+  },
   methods: {
-    showDetails(student) {
-      this.selectedStudent = student;
+    async fetchActivityLog() {
+      this.loading = true;
+      this.error = null;
+      try {
+        const { data, error } = await supabase
+          .from('violations')
+          .select(`
+            id,
+            date_recorded,
+            status,
+            frequency,
+            date_settled,
+            due_date,
+            students (
+              student_id,
+              student_name
+            ),
+            violation_categories (
+              id,
+              name
+            )
+          `);
+
+        if (error) {
+          console.error('Error fetching activity log:', error);
+          this.error = error.message;
+        } else {
+          this.violations = data;
+        }
+      } catch (err) {
+        console.error('Unexpected error fetching activity log:', err);
+        this.error = err.message;
+      } finally {
+        this.loading = false;
+      }
+    },
+    showDetails(violation) {
+      this.selectedViolation = violation; // Renamed to selectedViolation for clarity
     },
     showModal(student) {
       if (student) {

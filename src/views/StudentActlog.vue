@@ -1,7 +1,7 @@
 <template>
   <div class="activity-log">
     <div class="header">
-      <h1 style="margin-bottom: 0px; margin-top: 0px;">Hello there, Powerpuff!</h1>
+      <h1 style="margin-bottom: 0px; margin-top: 0px;">Hello there!</h1>
     </div>
     <hr style="border: 1px solid #eee; margin-bottom: 5px;">
 

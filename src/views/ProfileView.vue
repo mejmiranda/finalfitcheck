@@ -27,10 +27,11 @@ export default {
     });
 
     const fetchProfile = async() => {
+      const adminID = localStorage.getItem('authToken');
       const { data, error } = await supabase
       .from('admins')
       .select('*')
-      .limit(1)
+      .eq('id', adminID)
       .single();
 
       if (error) {

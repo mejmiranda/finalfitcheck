@@ -33,7 +33,7 @@
 <script setup>
 import { ref, onMounted } from 'vue';
 import { useRouter } from 'vue-router';
-import axios from 'axios';
+import  supabase  from './Supabase.js';
 
 const username = ref('');
 const password = ref('');
@@ -44,33 +44,39 @@ const router = useRouter();
 
 onMounted(() => {
   // Optional: Any initialization logic
-});
+}); 
 
 const login = async () => {
   isSubmitting.value = true;
   error.value = '';
 
-  console.log('Attempting login with:', { username: username.value, email: email.value, password: password.value });
 
   try {
-    // Simulate API call with a delay
-    await new Promise(resolve => setTimeout(resolve, 1000)); // Reduced delay for testing
+    const { data, error: fetchError } = await supabase
+    .from('admins') 
+    .select('*')
+    .eq('username', username.value)
+    .eq('email', email.value)
+    .eq('password', password.value)
+    .single();
+    console.log("data:", data)
 
-    // Sample credentials check
-    if (username.value === '123' && email.value === 'test@example.com' && password.value === '123') {
-      console.log('Login successful based on sample credentials. Setting authToken.');
-      localStorage.setItem('authToken', 'dummyToken'); // Set the token *before* pushing
-      console.log('Navigating to /dashboard.');
-      router.push('/dashboard');
-    } else {
-      console.log('Login failed based on sample credentials.');
-      error.value = 'Invalid username or password';
+    if (fetchError) {
+      throw fetchEerror;
     }
 
-    isSubmitting.value = false;
+    if (data) { 
+      console.log('Login Succesful', data);
+      localStorage.setItem('authToken', data.id);
+      router.push('/dashboard');
+    } else {
+      error.value = 'Invalid Credentials';
+    }
+
   } catch (err) {
-    console.error('Login error:', err);
+    console.error('Login error:', err.message || err);
     error.value = 'Login failed. Please try again.';
+  } finally {
     isSubmitting.value = false;
   }
 };
