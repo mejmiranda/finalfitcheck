@@ -7,9 +7,13 @@
     "build": "vue-cli-service build"
   },
   "dependencies": {
+    "@supabase/supabase-js": "^2.49.4",
+    "axios": "^1.8.4",
     "core-js": "^3.8.3",
+    "moment": "^2.30.1",
+    "pinia": "^3.0.2",
     "vue": "^3.2.13",
-    "vue-router": "^4.0.3"
+    "vue-router": "^4.5.0"
   },
   "devDependencies": {
     "@vue/cli-plugin-babel": "~5.0.0",
