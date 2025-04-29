@@ -24,7 +24,7 @@
         <img src="@/assets/reportsicon.png" alt="Reports Icon" class="icon" />
         Reports
       </router-link>
-      <button @click="handleLogout" class="logout-button">
+      <button @click="handleLogout" class="logout-button" style="margin-top: 20px;">
         <img src="@/assets/logout.png" alt="Logout Icon" class="icon" />
         Logout
       </button>
@@ -106,7 +106,7 @@ const handleLogout = () => {
 }
 
 .logout-button:hover {
-  background-color: #FFC500;
+  background-color: white;
 }
 
 .page-content {

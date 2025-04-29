@@ -33,7 +33,7 @@
 <script setup>
 import { ref, onMounted } from 'vue';
 import { useRouter } from 'vue-router';
-import  supabase  from './Supabase.js';
+import supabase from './Supabase.js';
 
 const username = ref('');
 const password = ref('');
@@ -44,34 +44,59 @@ const router = useRouter();
 
 onMounted(() => {
   // Optional: Any initialization logic
-}); 
+});
 
 const login = async () => {
   isSubmitting.value = true;
   error.value = '';
 
-
   try {
-    const { data, error: fetchError } = await supabase
-    .from('admins') 
-    .select('*')
-    .eq('username', username.value)
-    .eq('email', email.value)
-    .eq('password', password.value)
-    .single();
-    console.log("data:", data)
+    // Try to find user in admins table
+    const { data: adminData, error: adminError } = await supabase
+      .from('admins')
+      .select('id')
+      .eq('username', username.value)
+      .eq('email', email.value)
+      .eq('password', password.value)
+      .single();
 
-    if (fetchError) {
-      throw fetchEerror;
+    if (adminError) {
+      console.error('Admin login error:', adminError.message || adminError);
+      // Don't throw yet, try students table
     }
 
-    if (data) { 
-      console.log('Login Succesful', data);
-      localStorage.setItem('authToken', data.id);
+    if (adminData) {
+      console.log('Admin Login Successful', adminData);
+      localStorage.setItem('authToken', adminData.id);
+      localStorage.setItem('userRole', 'admin');
       router.push('/dashboard');
-    } else {
-      error.value = 'Invalid Credentials';
+      return;
     }
+
+    // If not found in admins, try students table
+    const { data: studentData, error: studentError } = await supabase
+      .from('students')
+      .select('id')
+      .eq('username', username.value)
+      .eq('email', email.value)
+      .eq('password', password.value)
+      .single();
+
+    if (studentError) {
+      console.error('Student login error:', studentError.message || studentError);
+      throw studentError; // Throw error if student login also fails
+    }
+
+    if (studentData) {
+      console.log('Student Login Successful', studentData);
+      localStorage.setItem('authToken', studentData.id);
+      localStorage.setItem('userRole', 'student');
+      router.push('/studentdash');
+      return;
+    }
+
+    // If not found in either table
+    error.value = 'Invalid Credentials';
 
   } catch (err) {
     console.error('Login error:', err.message || err);

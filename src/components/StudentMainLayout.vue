@@ -12,11 +12,7 @@
           <img src="@/assets/dashboardicon.png" alt="Dashboard Icon" class="icon" />
           Dashboard
         </router-link>
-        <router-link to="/studentactlog" :class="{ active: $route.path.startsWith('/studentactlog') }">
-          <img src="@/assets/actlogicon.png" alt="Actlog Icon" class="icon" />
-          Activity Log
-        </router-link>
-        <button @click="handleLogout" class="logout-button">
+        <button @click="handleLogout" class="logout-button" style="margin-top: 20px;">
           <img src="@/assets/logout.png" alt="Logout Icon" class="icon" />
           Logout
         </button>
@@ -98,7 +94,7 @@
   }
   
   .logout-button:hover {
-    background-color: #FFC500;
+    background-color: white;
   }
   
   .page-content {

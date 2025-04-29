@@ -10,8 +10,7 @@ import ReportsView from '@/views/ReportsView.vue';
 import StudentDashboard from '@/views/StudentDashboard.vue';
 import StudentMainLayout from '@/components/StudentMainLayout.vue';
 import StudentProfile from '@/views/StudentProfile.vue';
-import StudentActlog from '@/views/StudentActlog.vue';
-
+import SettleViolation from '@/views/SettleViolation.vue';
 
 const routes: Array<RouteRecordRaw> = [
   {
@@ -24,42 +23,47 @@ const routes: Array<RouteRecordRaw> = [
     redirect: '/login',
   },
   {
-      path: '/forgot-password',
-      name: 'ForgotPassword', // You can name it as you like
-      component: ForgotPass,
+    path: '/forgot-password',
+    name: 'ForgotPassword', // You can name it as you like
+    component: ForgotPass,
   },
   {
-    path: '/studentlogin',
+    path: '/settle-violation/:violationId', // Add the :violationId parameter
+    name: 'SettleViolation',
+    component: SettleViolation,
+  },
+  {
+    path: '/studentdash',
     component: StudentMainLayout,
+    meta: { requiresAuth: true },
     children: [
-      {       
+      {
         path: '/studentdash',
-        name: 'StudentDashboard', // You can name it as you like
-        component: StudentDashboard},
-      {       
+        name: 'StudentDashboard',
+        component: StudentDashboard
+      },
+      {
         path: '/studentprofile',
-        name: 'StudentProfile', // You can name it as you like
-        component: StudentProfile},
-      {       
-        path: '/studentactlog',
-        name: 'StudentActlog', // You can name it as you like
-        component: StudentActlog},
-    ]
-},
+        name: 'StudentProfile',
+        component: StudentProfile
+      },
+    ],
+  },
   {
     path: '/dashboard',
     component: MainLayout,
+    meta: { requiresAuth: true, requiresAdmin: true },
     children: [
       {
         path: '',
         name: 'Dashboard',
         component: DashboardView,
-      },  
+      },
       {
         path: '/activity-log',
         name: 'ActivityLog',
         component: ActivityLogView,
-      },  
+      },
       {
         path: '/notification',
         name: 'Notification',
@@ -76,21 +80,31 @@ const routes: Array<RouteRecordRaw> = [
         component: ReportsView,
       },
     ],
-      meta: { requiresAuth: true },
-    },
-  ];
+  },
+];
 
 const router = createRouter({
   history: createWebHashHistory(process.env.BASE_URL),
   routes,
 });
-router.beforeEach((to, from, next) => {
-  const isAuthenticated = localStorage.getItem('authToken');
 
-  if (to.meta.requiresAuth && !isAuthenticated && to.path !== '/login') {
+router.beforeEach((to, from, next) => {
+  const authToken = localStorage.getItem('authToken');
+  const userRole = localStorage.getItem('userRole');
+
+  if (to.meta.requiresAuth && !authToken) {
     next('/login');
-  } else if (isAuthenticated && to.path === '/login') {
-    next('/dashboard'); // Redirect logged-in users away from the login page
+  } else if (authToken && to.path === '/login') {
+    if (userRole === 'student') {
+      next('/studentdash');
+    } else if (userRole === 'admin') {
+      next('/dashboard');
+    } else {
+      next('/'); // Fallback
+    }
+  } else if (to.meta.requiresAdmin && userRole !== 'admin') {
+    console.warn('Admin access required.');
+    next('/studentdash'); // Redirect non-admins trying to access admin routes
   } else {
     next();
   }
