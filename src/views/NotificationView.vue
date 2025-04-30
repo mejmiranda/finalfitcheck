@@ -9,32 +9,32 @@
         <div class="sort-by">
           <span>Sort by:</span>
           <select v-model="sortBy">
-            <option value="newest">Newest</option>
-            <option value="oldest">Oldest</option>
+            <option value="created_at_desc">Newest</option>
+            <option value="created_at_asc">Oldest</option>
           </select>
         </div>
       </div>
     </div>
     <ul class="notifications-list">
-      <li v-for="(notification, index) in filteredNotifications" :key="index" class="notification-item" :class="notification.status">
+      <li v-for="notification in filteredNotifications" :key="notification.id" class="notification-item" :class="getNotificationClass(notification)">
         <template v-if="notification.type === 'violation'">
           <p>
-            <span class="user-name">{{ notification.userName }}</span> has violated
-            <span class="violation">{{ notification.specificRule }}</span> on
-            <span class="date">{{ formatDate(notification.date) }}</span>; please review and take appropriate action.
+            <span class="user-name">{{ notification.students?.student_name }}</span> has violated
+            <span class="violation">{{ notification.violation_categories?.name }}</span> on
+            <span class="date">{{ formatDate(notification.created_at) }}</span>; please review and take appropriate action.
           </p>
         </template>
         <template v-else-if="notification.type === 'settled'">
           <p>
-            <span class="user-name">{{ notification.userName }}</span> has settled their violation regarding
-            <span class="violation">{{ notification.specificRule }}</span> on
-            <span class="date">{{ formatDate(notification.date) }}.</span>
+            <span class="user-name">{{ notification.students?.student_name }}</span> has settled their violation regarding
+            <span class="violation">{{ notification.violation_categories?.name }}</span> on
+            <span class="date">{{ formatDate(notification.date_settled) }}.</span>
           </p>
         </template>
         <template v-else-if="notification.type === 'overdue'">
           <p class="overdue">
-            <span class="user-name">{{ notification.userName }}</span> has an overdue violation from
-            <span class="date">{{ formatDate(notification.date) }}</span> that remains unsettled;
+            <span class="user-name">{{ notification.students?.student_name }}</span> has an overdue violation from
+            <span class="date">{{ formatDate(notification.date_recorded) }}</span> that remains unsettled;
             <button class="action-button">click to view the violation and notify the student.</button>
           </p>
         </template>
@@ -42,56 +42,44 @@
           <p>Unknown notification type.</p>
         </template>
       </li>
-      <li v-if="filteredNotifications.length === 0">
+      <li v-if="filteredNotifications.length === 0 && !loading">
         <p class="empty-message">No notifications found.</p>
+      </li>
+      <li v-if="loading">
+        <p class="loading-message">Loading notifications...</p>
       </li>
     </ul>
   </div>
 </template>
 
 <script>
-import { ref, computed } from 'vue';
-import moment from 'moment'; // You might need to install this: npm install moment
+import { ref, computed, onMounted } from 'vue';
+import moment from 'moment';
+import supabase from '@/components/Supabase'; // Adjust the import path if needed
 
 export default {
   setup() {
     const searchQuery = ref('');
-    const sortBy = ref('newest');
-    const notifications = ref([
-      { type: 'violation', userName: '[User Name]', specificRule: '[specific rule]', date: '2025-04-05T08:00:00Z', status: 'new' },
-      { type: 'settled', userName: '[User Name]', specificRule: '[specific rule]', date: '2025-04-04T15:30:00Z', status: 'settled' },
-      { type: 'overdue', userName: '[User Name]', specificRule: '[specific rule]', date: '2025-04-01T10:45:00Z', status: 'overdue' },
-      { type: 'violation', userName: '[User Name]', specificRule: '[specific rule]', date: '2025-04-03T19:15:00Z', status: 'new' },
-      { type: 'settled', userName: '[User Name]', specificRule: '[specific rule]', date: '2025-04-02T11:00:00Z', status: 'settled' },
-      { type: 'overdue', userName: '[User Name]', specificRule: '[specific rule]', date: '2025-03-30T14:20:00Z', status: 'overdue' },
-      { type: 'violation', userName: '[User Name]', specificRule: '[specific rule]', date: '2025-04-05T09:30:00Z', status: 'new' },
-      { type: 'settled', userName: '[User Name]', specificRule: '[specific rule]', date: '2025-04-03T08:45:00Z', status: 'settled' },
-      { type: 'overdue', userName: '[User Name]', specificRule: '[specific rule]', date: '2025-03-28T16:00:00Z', status: 'overdue' },
-      { type: 'violation', userName: '[User Name]', specificRule: '[specific rule]', date: '2025-04-04T12:00:00Z', status: 'new' },
-      { type: 'settled', userName: '[User Name]', specificRule: '[specific rule]', date: '2025-04-02T17:15:00Z', status: 'settled' },
-      { type: 'overdue', userName: '[User Name]', specificRule: '[specific rule]', date: '2025-03-26T09:50:00Z', status: 'overdue' },
-      { type: 'violation', userName: '[User Name]', specificRule: '[specific rule]', date: '2025-04-03T21:45:00Z', status: 'new' },
-      { type: 'settled', userName: '[User Name]', specificRule: '[specific rule]', date: '2025-04-01T13:00:00Z', status: 'settled' },
-      { type: 'overdue', userName: '[User Name]', specificRule: '[specific rule]', date: '2025-03-24T18:30:00Z', status: 'overdue' },
-      { type: 'violation', userName: '[User Name]', specificRule: '[specific rule]', date: '2025-04-05T07:15:00Z', status: 'new' },
-    ]);
+    const sortBy = ref('created_at_desc');
+    const notifications = ref([]);
+    const loading = ref(false);
+    const error = ref(null);
 
     const filteredNotifications = computed(() => {
       return notifications.value
         .filter(notification => {
           const searchTerm = searchQuery.value.toLowerCase();
+          const studentName = notification.students?.student_name?.toLowerCase() || '';
+          const violationName = notification.violation_categories?.name?.toLowerCase() || '';
           return (
-            notification.userName.toLowerCase().includes(searchTerm) ||
-            notification.specificRule.toLowerCase().includes(searchTerm)
+            studentName.includes(searchTerm) ||
+            violationName.includes(searchTerm)
           );
         })
         .sort((a, b) => {
-          if (sortBy.value === 'newest') {
-            return new Date(b.date) - new Date(a.date);
-          } else if (sortBy.value === 'oldest') {
-            return new Date(a.date) - new Date(b.date);
-          }
-          return 0;
+          const dateA = new Date(a.created_at);
+          const dateB = new Date(b.created_at);
+          return sortBy.value === 'created_at_desc' ? dateB - dateA : dateA - dateB;
         });
     });
 
@@ -99,12 +87,66 @@ export default {
       return moment(date).format('YYYY-MM-DD HH:mm:ss');
     };
 
+    const getNotificationClass = (notification) => {
+      if (notification.type === 'violation') {
+        return 'new'; // You might want to base this on a 'is_read' status or similar
+      } else if (notification.type === 'settled') {
+        return 'settled';
+      } else if (notification.type === 'overdue') {
+        return 'overdue';
+      }
+      return '';
+    };
+
+    const fetchNotifications = async () => {
+      loading.value = true;
+      error.value = null;
+      try {
+        const { data, error: fetchError } = await supabase
+          .from('notifications')
+          .select(`
+            id,
+            title,
+            message,
+            type,
+            is_read,
+            created_at,
+            date_settled,
+            date_recorded,
+            students (
+              student_name
+            ),
+            violation_categories (
+              name
+            )
+          `)
+          .order('created_at', { ascending: false });
+
+        if (fetchError) {
+          console.error('Error fetching notifications:', fetchError);
+          error.value = fetchError.message;
+        } else {
+          notifications.value = data;
+        }
+      } catch (err) {
+        console.error('Unexpected error fetching notifications:', err);
+        error.value = err.message;
+      } finally {
+        loading.value = false;
+      }
+    };
+
+    onMounted(fetchNotifications);
+
     return {
       searchQuery,
       sortBy,
       notifications,
       filteredNotifications,
       formatDate,
+      getNotificationClass,
+      loading,
+      error,
     };
   },
 };
@@ -200,5 +242,11 @@ export default {
 .empty-message {
   text-align: center;
   color: #999;
+}
+
+.loading-message {
+  text-align: center;
+  color: #999;
+  padding: 15px;
 }
 </style>

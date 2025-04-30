@@ -9,19 +9,19 @@
         <img src="@/assets/footcount-icon.png" alt="Total Foot Count Icon" style="max-height: 50px; margin-right: 10px;">
         <div>
           <p style="margin: 0; font-weight: bold;">Total Foot Count</p>
-          </div>
+        </div>
       </div>
       <div style="display: flex; align-items: center;">
         <img src="@/assets/newvio-icon.png" alt="New Violation Icon" style="max-height: 50px; margin-right: 10px;">
         <div>
           <p style="margin: 0; font-weight: bold;">New Violations</p>
-          </div>
+        </div>
       </div>
       <div style="display: flex; align-items: center;">
         <img src="@/assets/unsettled-icon.png" alt="Unsettled Violation Icon" style="max-height: 50px; margin-right: 10px;">
         <div>
           <p style="margin: 0; font-weight: bold;">Unsettled Violations</p>
-          </div>
+        </div>
       </div>
     </div>
 
@@ -32,8 +32,8 @@
           <input type="text" placeholder="Search Name" class="search-input" v-model="searchQuery" style="margin-right: 10px;">
           <select v-model="filterStatus" style="margin-right: 10px;">
             <option value="">All Status</option>
-            <option value="settled">Settled</option>
-            <option value="unsettled">Unsettled</option>
+            <option :value="true">Settled</option>
+            <option :value="false">Unsettled</option>
           </select>
           <select v-model="filterViolation" style="margin-right: 10px;">
             <option value="">All Violations</option>
@@ -51,7 +51,7 @@
         <thead>
           <tr>
             <th>Student Name</th>
-            <th>Student ID</th>
+            <th>Student Number</th>
             <th>Email</th>
             <th>Violation</th>
             <th>Date</th>
@@ -59,17 +59,17 @@
           </tr>
         </thead>
         <tbody>
-          <tr v-for="violation in filteredViolations" :key="violation.id">
-            <td style="font-size: 12px;">{{ violation.students?.student_name }}</td>
-            <td style="font-size: 12px;">{{ violation.students?.student_id }}</td>
-            <td style="font-size: 12px;">{{ violation.students?.email }}</td>
-            <td style="font-size: 12px;">{{ violation.violation_categories?.name }}</td>
-            <td style="font-size: 12px;">{{ violation.date_recorded }}</td>
-            <td :class="['status', violation.status?.toLowerCase()]" style="font-size: 12px;">{{ violation.status }}</td>
+          <tr v-for="log in filteredActivityLogs" :key="log.id">
+            <td style="font-size: 12px;">{{ log.students?.student_name }}</td>
+            <td style="font-size: 12px;">{{ log.students?.student_number }}</td>
+            <td style="font-size: 12px;">{{ log.students?.email }}</td>
+            <td style="font-size: 12px;">{{ log.violation_categories?.name }}</td>
+            <td style="font-size: 12px;">{{ log.date_recorded }}</td>
+            <td :class="['status', log.statusreal ? 'settled' : 'unsettled']" style="font-size: 12px;">{{ log.statusreal ? 'Settled' : 'Unsettled' }}</td>
           </tr>
         </tbody>
       </table>
-      <p v-if="!violationsWithDetails.length && !loading && !error">No violations found.</p>
+      <p v-if="!activityLogsWithDetails.length && !loading && !error">No violations found.</p>
     </div>
   </div>
 </template>
@@ -80,11 +80,11 @@ import supabase from '@/components/Supabase'; // Ensure this path is correct
 export default {
   data() {
     return {
-      violationsWithDetails: [],
+      activityLogsWithDetails: [],
       loading: true,
       error: null,
       searchQuery: '',
-      filterStatus: '',
+      filterStatus: '', // Will hold boolean values (true/false) or '' for all
       filterViolation: '',
       sortBy: 'dateDesc',
       violationCategories: [], // To store violation categories for the filter
@@ -92,24 +92,20 @@ export default {
     };
   },
   computed: {
-    filteredViolations() {
-      console.log('Current filterStatus:', this.filterStatus); // <--- ADD THIS LINE
-      let filtered = this.violationsWithDetails.filter(violation =>
-        violation.students?.student_name?.toLowerCase().includes(this.searchQuery.toLowerCase())
+    filteredActivityLogs() {
+      let filtered = this.activityLogsWithDetails.filter(log =>
+        log.students?.student_name?.toLowerCase().includes(this.searchQuery.toLowerCase())
       );
 
-      if (this.filterStatus) {
-        filtered = filtered.filter(violation => {
-          console.log('Comparing:', violation.status, 'with', this.filterStatus);
-          return violation.status === this.filterStatus;
-      });
-    }
+      if (this.filterStatus !== '') {
+        filtered = filtered.filter(log => log.statusreal === this.filterStatus);
+      }
 
       if (this.filterViolation) {
-        filtered = filtered.filter(violation =>
-        violation.violation_categories?.name?.toLowerCase() === this.filterViolation.toLowerCase()
-      );
-    }
+        filtered = filtered.filter(log =>
+          log.violation_categories?.name?.toLowerCase() === this.filterViolation.toLowerCase()
+        );
+      }
 
       const sorted = [...filtered];
 
@@ -117,8 +113,8 @@ export default {
         switch (this.sortBy) {
           case 'studentName':
             return a.students?.student_name?.localeCompare(b.students?.student_name);
-          case 'studentId':
-            return String(a.students?.student_id).localeCompare(String(b.students?.student_id));
+          case 'studentNumber':
+            return String(a.students?.student_number).localeCompare(String(b.students?.student_number));
           case 'email':
             return a.students?.email?.localeCompare(b.students?.email);
           case 'dateAsc':
@@ -133,7 +129,7 @@ export default {
     },
   },
   async mounted() {
-    await this.fetchViolationsWithDetails();
+    await this.fetchActivityLogsWithDetails();
     await this.fetchViolationCategories();
     this.setupRealtimeSubscription();
   },
@@ -143,18 +139,18 @@ export default {
     }
   },
   methods: {
-    async fetchViolationsWithDetails() {
+    async fetchActivityLogsWithDetails() {
       this.loading = true;
       this.error = null;
       try {
         const { data, error } = await supabase
-          .from('violations')
+          .from('activity_logs')
           .select(`
             id,
             date_recorded,
-            status,
+            statusreal,
             students (
-              student_id,
+              student_number,
               student_name,
               email
             ),
@@ -165,13 +161,13 @@ export default {
           `);
 
         if (error) {
-          console.error('Error fetching violations:', error);
+          console.error('Error fetching activity logs:', error);
           this.error = error.message;
         } else {
-          this.violationsWithDetails = data;
+          this.activityLogsWithDetails = data;
         }
       } catch (err) {
-        console.error('Unexpected error fetching violations:', err);
+        console.error('Unexpected error fetching activity logs:', err);
         this.error = err.message;
       } finally {
         this.loading = false;
@@ -194,10 +190,10 @@ export default {
     },
     setupRealtimeSubscription() {
       this.subscription = supabase
-        .channel('realtime:violations')
-        .on('postgres_changes', { event: '*', schema: 'public', table: 'violations' }, async payload => {
-          console.log('Change detected in violations:', payload);
-          await this.fetchViolationsWithDetails(); // Re-fetch latest data on changes
+        .channel('realtime:activity_logs')
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'activity_logs' }, async payload => {
+          console.log('Change detected in activity_logs:', payload);
+          await this.fetchActivityLogsWithDetails(); // Re-fetch latest data on changes
         })
         .subscribe();
     },

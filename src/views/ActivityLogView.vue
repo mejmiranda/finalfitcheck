@@ -51,26 +51,26 @@
       <thead>
         <tr>
           <th>Student Name</th>
-          <th>Student ID</th>
+          <th>Student Number</th>
           <th>Violation</th>
           <th>Date and Time</th>
           <th></th>
         </tr>
       </thead>
       <tbody>
-        <tr v-for="violation in filteredViolations" :key="violation.id">
+        <tr v-for="log in filteredActivityLogs" :key="log.id">
           <td>
             <div class="student-name-cell">
-              {{ violation.students?.student_name }}
+              {{ log.students?.student_name }}
             </div>
           </td>
-          <td>{{ violation.students?.student_id }}</td>
-          <td>{{ violation.violation_categories?.name }}</td>
-          <td>{{ violation.date_recorded }}</td>
+          <td>{{ log.students?.student_number }}</td>
+          <td>{{ log.violation_categories?.name }}</td>
+          <td>{{ log.date_recorded }}</td>
           <td style="text-align: right;">
             <button
               class="view-details-button"
-              @click="showDetails(violation)"
+              @click="showDetails(log)"
             >
               View Details
             </button>
@@ -78,7 +78,7 @@
         </tr>
       </tbody>
     </table>
-    <p v-else-if="!violations.length && !loading && !error && !selectedViolation">No activity found.</p>
+    <p v-else-if="!activityLogs.length && !loading && !error && !selectedViolation">No activity found.</p>
 
     <div v-if="selectedViolation" class="violation-details-full">
       <h2>Violation Details</h2>
@@ -93,15 +93,15 @@
         </div>
         <div class="details-text" style="font-size: medium;">
           <p><strong>Student Name:</strong> {{ selectedViolation.students?.student_name }}</p>
-          <p><strong>Student ID:</strong> {{ selectedViolation.students?.student_id }}</p>
+          <p><strong>Student Number:</strong> {{ selectedViolation.students?.student_number }}</p>
           <p><strong>Violation:</strong> {{ selectedViolation.violation_categories?.name }}</p>
           <p><strong>Frequency:</strong> {{ selectedViolation.frequency }}</p>
-          <p><strong>Status:</strong> {{ selectedViolation.status }}</p>
+          <p><strong>Status:</strong> {{ selectedViolation.statusreal ? 'Settled' : 'Unsettled' }}</p>
           <p><strong>Date Recorded:</strong> {{ selectedViolation.date_recorded }}</p>
-          <p v-if="selectedViolation.status === 'settled' && selectedViolation.date_settled">
+          <p v-if="selectedViolation.statusreal && selectedViolation.date_settled">
             <strong>Date Settled:</strong> {{ selectedViolation.date_settled }}
           </p>
-          <p v-if="selectedViolation.status === 'unsettled' && selectedViolation.due_date">
+          <p v-if="!selectedViolation.statusreal && selectedViolation.due_date">
             <strong>Due Date:</strong> {{ selectedViolation.due_date }}
           </p>
           <div style="text-align:left; margin-top: 50px;">
@@ -128,29 +128,28 @@ export default {
     return {
       loading: false,
       error: null,
-      violations: [],
-      activeTab: 'settled',
+      activityLogs: [], // Changed from violations
+      activeTab: 'unsettled', // Default to unsettled as it's now boolean false
       searchQuery: '',
       sortBy: 'dateDesc',
-      selectedViolation: null, // Renamed from selectedStudent for clarity
+      selectedViolation: null,
       isModalVisible: false,
       modalImageUrl: '',
     };
   },
   computed: {
-    filteredViolations() {
-      let filtered = this.violations.filter(violation => {
-        const studentName = violation.students?.student_name?.toLowerCase() || '';
-        const violationName = violation.violation_categories?.name?.toLowerCase() || '';
+    filteredActivityLogs() {
+      let filtered = this.activityLogs.filter(log => {
+        const studentName = log.students?.student_name?.toLowerCase() || '';
+        const violationName = log.violation_categories?.name?.toLowerCase() || '';
         const searchText = this.searchQuery.toLowerCase();
 
         const matchesSearch = studentName.includes(searchText) || violationName.includes(searchText);
 
-        if (this.activeTab === 'settled') {
-          return violation.status === 'settled' && matchesSearch;
-        } else {
-          return violation.status === 'unsettled' && matchesSearch;
-        }
+        const settledFilter = this.activeTab === 'settled';
+        const isSettled = !!log.statusreal; // Convert boolean to truthy/falsy
+
+        return matchesSearch && (this.activeTab === '' || (settledFilter === isSettled));
       });
 
       const sorted = [...filtered];
@@ -180,16 +179,16 @@ export default {
       this.error = null;
       try {
         const { data, error } = await supabase
-          .from('violations')
+          .from('activity_logs')
           .select(`
             id,
             date_recorded,
-            status,
+            statusreal,
             frequency,
             date_settled,
             due_date,
             students (
-              student_id,
+              student_number,
               student_name
             ),
             violation_categories (
@@ -202,7 +201,7 @@ export default {
           console.error('Error fetching activity log:', error);
           this.error = error.message;
         } else {
-          this.violations = data;
+          this.activityLogs = data;
         }
       } catch (err) {
         console.error('Unexpected error fetching activity log:', err);
@@ -211,12 +210,12 @@ export default {
         this.loading = false;
       }
     },
-    showDetails(violation) {
-      this.selectedViolation = violation; // Renamed to selectedViolation for clarity
+    showDetails(log) { // Changed parameter name
+      this.selectedViolation = log;
     },
     showModal(student) {
       if (student) {
-        this.modalImageUrl = require('@/assets/studentpic.png'); // Adjust path if necessary
+        this.modalImageUrl = require('@/assets/studentpic.png');
         this.isModalVisible = true;
       }
     },
