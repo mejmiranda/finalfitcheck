@@ -9,18 +9,21 @@
         <img src="@/assets/footcount-icon.png" alt="Total Foot Count Icon" style="max-height: 50px; margin-right: 10px;">
         <div>
           <p style="margin: 0; font-weight: bold;">Total Foot Count</p>
+          <p style="margin: 0;">{{ totalFootCount }}</p>
         </div>
       </div>
       <div style="display: flex; align-items: center;">
         <img src="@/assets/newvio-icon.png" alt="New Violation Icon" style="max-height: 50px; margin-right: 10px;">
         <div>
           <p style="margin: 0; font-weight: bold;">New Violations</p>
+          <p style="margin: 0;">{{ newViolationCount }}</p>
         </div>
       </div>
       <div style="display: flex; align-items: center;">
         <img src="@/assets/unsettled-icon.png" alt="Unsettled Violation Icon" style="max-height: 50px; margin-right: 10px;">
         <div>
           <p style="margin: 0; font-weight: bold;">Unsettled Violations</p>
+          <p style="margin: 0;">{{ unsettledViolationCount }}</p>
         </div>
       </div>
     </div>
@@ -42,6 +45,8 @@
           <select v-model="sortBy">
             <option value="dateDesc">Newest</option>
             <option value="dateAsc">Oldest</option>
+            <option value="studentName">Name (A-Z)</option>
+            <option value="studentNameDesc">Name (Z-A)</option>
           </select>
         </div>
       </div>
@@ -64,7 +69,9 @@
             <td style="font-size: 12px;">{{ log.students?.student_number }}</td>
             <td style="font-size: 12px;">{{ log.students?.email }}</td>
             <td style="font-size: 12px;">{{ log.violation_categories?.name }}</td>
-            <td style="font-size: 12px;">{{ log.date_recorded }}</td>
+            <td style="font-size: 12px;">
+              {{ log.statusreal && log.date_settled ? formatDate(log.date_settled) : formatDate(log.date_recorded) }}
+            </td>
             <td :class="['status', log.statusreal ? 'settled' : 'unsettled']" style="font-size: 12px;">{{ log.statusreal ? 'Settled' : 'Unsettled' }}</td>
           </tr>
         </tbody>
@@ -84,11 +91,13 @@ export default {
       loading: true,
       error: null,
       searchQuery: '',
-      filterStatus: '', // Will hold boolean values (true/false) or '' for all
+      filterStatus: '',
       filterViolation: '',
       sortBy: 'dateDesc',
-      violationCategories: [], // To store violation categories for the filter
+      violationCategories: [],
       subscription: null,
+      totalFootCount: 0,
+      newViolationCount: 0,
     };
   },
   computed: {
@@ -113,6 +122,8 @@ export default {
         switch (this.sortBy) {
           case 'studentName':
             return a.students?.student_name?.localeCompare(b.students?.student_name);
+          case 'studentNameDesc':
+            return b.students?.student_name?.localeCompare(a.students?.student_name);
           case 'studentNumber':
             return String(a.students?.student_number).localeCompare(String(b.students?.student_number));
           case 'email':
@@ -127,11 +138,16 @@ export default {
 
       return sorted;
     },
+    unsettledViolationCount() {
+      return this.activityLogsWithDetails.filter(log => !log.statusreal).length;
+    },
   },
   async mounted() {
     await this.fetchActivityLogsWithDetails();
     await this.fetchViolationCategories();
+    await this.fetchCurrentDayFootCount(); // Fetch foot count on mount
     this.setupRealtimeSubscription();
+    this.calculateDashboardCounts();
   },
   beforeUnmount() {
     if (this.subscription) {
@@ -139,6 +155,11 @@ export default {
     }
   },
   methods: {
+    formatDate(isoString) {
+      if (!isoString) return '';
+      const date = new Date(isoString);
+      return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')} ${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}:${String(date.getSeconds()).padStart(2, '0')}`;
+    },
     async fetchActivityLogsWithDetails() {
       this.loading = true;
       this.error = null;
@@ -148,6 +169,7 @@ export default {
           .select(`
             id,
             date_recorded,
+            date_settled,
             statusreal,
             students (
               student_number,
@@ -165,6 +187,7 @@ export default {
           this.error = error.message;
         } else {
           this.activityLogsWithDetails = data;
+          this.calculateDashboardCounts();
         }
       } catch (err) {
         console.error('Unexpected error fetching activity logs:', err);
@@ -188,14 +211,55 @@ export default {
         console.error('Unexpected error fetching violation categories:', err);
       }
     },
+    async fetchCurrentDayFootCount() {
+      try {
+        const today = new Date();
+        const startOfTodayISO = today.toISOString().slice(0, 10) + 'T00:00:00+00:00'; // Midnight UTC
+        const endOfTodayISO = today.toISOString().slice(0, 10) + 'T23:59:59+00:00';   // End of day UTC
+
+        const { data, error } = await supabase
+          .from('foot_counts')
+          .select('count')
+          .gte('timestamp', startOfTodayISO)
+          .lte('timestamp', endOfTodayISO);
+
+        if (error) {
+          console.error('Error fetching current day foot count:', error);
+        } else {
+          this.totalFootCount = data.reduce((sum, item) => sum + item.count, 0);
+        }
+      } catch (err) {
+        console.error('Unexpected error fetching foot count:', err);
+      }
+    },
     setupRealtimeSubscription() {
       this.subscription = supabase
         .channel('realtime:activity_logs')
         .on('postgres_changes', { event: '*', schema: 'public', table: 'activity_logs' }, async payload => {
           console.log('Change detected in activity_logs:', payload);
-          await this.fetchActivityLogsWithDetails(); // Re-fetch latest data on changes
+          await this.fetchActivityLogsWithDetails();
+        })
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'foot_counts' }, async payload => {
+          console.log('Change detected in foot_counts:', payload);
+          await this.fetchCurrentDayFootCount(); // Refresh foot count on changes
         })
         .subscribe();
+    },
+    calculateDashboardCounts() {
+      // Calculate the count of unsettled violations
+      // This is now handled by the unsettledViolationCount computed property
+
+      // Calculate the count of new violations for the current day
+      const today = new Date();
+      const startOfToday = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+      const endOfToday = new Date(today.getFullYear(), today.getMonth(), today.getDate() + 1);
+
+      this.newViolationCount = this.activityLogsWithDetails.filter(log => {
+        const recordedDate = new Date(log.date_recorded);
+        return recordedDate >= startOfToday && recordedDate < endOfToday;
+      }).length;
+
+      // this.totalFootCount is now fetched separately in fetchCurrentDayFootCount
     },
   },
 };

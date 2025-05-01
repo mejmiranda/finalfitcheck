@@ -9,18 +9,21 @@
         <img src="@/assets/footcount-icon.png" alt="Total Foot Count Icon" style="max-height: 50px; margin-right: 10px;">
         <div>
           <p style="margin: 0; font-weight: bold;">Total Foot Count</p>
+          <p style="margin: 0;">{{ totalFootCount }}</p>
         </div>
       </div>
       <div style="display: flex; align-items: center;">
         <img src="@/assets/newvio-icon.png" alt="New Violation Icon" style="max-height: 50px; margin-right: 10px;">
         <div>
           <p style="margin: 0; font-weight: bold;">New Violations</p>
+          <p style="margin: 0;">{{ newViolationCount }}</p>
         </div>
       </div>
       <div style="display: flex; align-items: center;">
         <img src="@/assets/unsettled-icon.png" alt="Unsettled Violation Icon" style="max-height: 50px; margin-right: 10px;">
         <div>
           <p style="margin: 0; font-weight: bold;">Unsettled Violations</p>
+          <p style="margin: 0;">{{ unsettledViolationCount }}</p>
         </div>
       </div>
     </div>
@@ -28,9 +31,7 @@
     <div class="activity-log-header" style="margin-top: 20px;">
       <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
         <h2>Activity Log</h2>
-        <div class="search-sort">
-          <input type="text" placeholder="Search Name" v-model="searchQuery" class="search-input" />
-        </div>
+
       </div>
     </div>
 
@@ -43,6 +44,9 @@
         <option value="nameAsc">Name (A-Z)</option>
         <option value="nameDesc">Name (Z-A)</option>
       </select>
+      <div class="search-sort" style="margin-left: 586px;">
+        <input type="text" placeholder="Search Name" v-model="searchQuery" class="search-input" />
+      </div>
     </div>
 
     <div v-if="loading">Loading activity log...</div>
@@ -66,7 +70,11 @@
           </td>
           <td>{{ log.students?.student_number }}</td>
           <td>{{ log.violation_categories?.name }}</td>
-          <td>{{ log.date_recorded }}</td>
+          <td>
+            <span v-if="!log.statusreal && log.date_recorded">{{ formatDate(log.date_recorded) }}</span>
+            <span v-else-if="log.statusreal && log.date_settled">{{ formatDate(log.date_settled) }}</span>
+            <span v-else>--</span>
+          </td>
           <td style="text-align: right;">
             <button
               class="view-details-button"
@@ -97,12 +105,20 @@
           <p><strong>Violation:</strong> {{ selectedViolation.violation_categories?.name }}</p>
           <p><strong>Frequency:</strong> {{ selectedViolation.frequency }}</p>
           <p><strong>Status:</strong> {{ selectedViolation.statusreal ? 'Settled' : 'Unsettled' }}</p>
-          <p><strong>Date Recorded:</strong> {{ selectedViolation.date_recorded }}</p>
-          <p v-if="selectedViolation.statusreal && selectedViolation.date_settled">
-            <strong>Date Settled:</strong> {{ selectedViolation.date_settled }}
+          <p>
+            <strong>Date Recorded:</strong>
+            <span v-if="selectedViolation.date_recorded">{{ formatDate(selectedViolation.date_recorded) }}</span>
+            <span v-else>--</span>
           </p>
-          <p v-if="!selectedViolation.statusreal && selectedViolation.due_date">
-            <strong>Due Date:</strong> {{ selectedViolation.due_date }}
+          <p v-if="selectedViolation.statusreal">
+            <strong>Date Settled:</strong>
+            <span v-if="selectedViolation.date_settled">{{ formatDate(selectedViolation.date_settled) }}</span>
+            <span v-else>--</span>
+          </p>
+          <p v-else>
+            <strong>Due Date:</strong>
+            <span v-if="selectedViolation.due_date">{{ formatDate(selectedViolation.due_date) }}</span>
+            <span v-else>--</span>
           </p>
           <div style="text-align:left; margin-top: 50px;">
             <button class="return-button" @click="selectedViolation = null">Return to List</button>
@@ -128,13 +144,16 @@ export default {
     return {
       loading: false,
       error: null,
-      activityLogs: [], // Changed from violations
-      activeTab: 'unsettled', // Default to unsettled as it's now boolean false
+      activityLogs: [],
+      activeTab: 'unsettled',
       searchQuery: '',
       sortBy: 'dateDesc',
       selectedViolation: null,
       isModalVisible: false,
       modalImageUrl: '',
+      totalFootCount: 0,
+      newViolationCount: 0,
+      unsettledViolationCount: 0,
     };
   },
   computed: {
@@ -147,7 +166,7 @@ export default {
         const matchesSearch = studentName.includes(searchText) || violationName.includes(searchText);
 
         const settledFilter = this.activeTab === 'settled';
-        const isSettled = !!log.statusreal; // Convert boolean to truthy/falsy
+        const isSettled = !!log.statusreal;
 
         return matchesSearch && (this.activeTab === '' || (settledFilter === isSettled));
       });
@@ -172,8 +191,36 @@ export default {
   },
   async mounted() {
     await this.fetchActivityLog();
+    await this.fetchCurrentDayFootCount();
+    this.calculateDashboardCounts();
   },
   methods: {
+    formatDate(isoString) {
+    if (!isoString) return '';
+    const date = new Date(isoString);
+    return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')} ${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}:${String(date.getSeconds()).padStart(2, '0')}`;
+  },
+    async fetchCurrentDayFootCount() {
+      try {
+        const today = new Date();
+        const startOfTodayISO = today.toISOString().slice(0, 10) + 'T00:00:00+00:00';
+        const endOfTodayISO = today.toISOString().slice(0, 10) + 'T23:59:59+00:00';
+
+        const { data, error } = await supabase
+          .from('foot_counts')
+          .select('count')
+          .gte('timestamp', startOfTodayISO)
+          .lte('timestamp', endOfTodayISO);
+
+        if (error) {
+          console.error('Error fetching current day foot count:', error);
+        } else {
+          this.totalFootCount = data.reduce((sum, item) => sum + item.count, 0);
+        }
+      } catch (err) {
+        console.error('Unexpected error fetching foot count:', err);
+      }
+    },
     async fetchActivityLog() {
       this.loading = true;
       this.error = null;
@@ -202,6 +249,7 @@ export default {
           this.error = error.message;
         } else {
           this.activityLogs = data;
+          this.calculateDashboardCounts();
         }
       } catch (err) {
         console.error('Unexpected error fetching activity log:', err);
@@ -210,7 +258,7 @@ export default {
         this.loading = false;
       }
     },
-    showDetails(log) { // Changed parameter name
+    showDetails(log) {
       this.selectedViolation = log;
     },
     showModal(student) {
@@ -222,6 +270,18 @@ export default {
     closeModal() {
       this.isModalVisible = false;
       this.modalImageUrl = '';
+    },
+    calculateDashboardCounts() {
+      this.unsettledViolationCount = this.activityLogs.filter(log => !log.statusreal).length;
+
+      const today = new Date();
+      const startOfToday = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+      const endOfToday = new Date(today.getFullYear(), today.getMonth(), today.getDate() + 1);
+
+      this.newViolationCount = this.activityLogs.filter(log => {
+        const recordedDate = new Date(log.date_recorded);
+        return recordedDate >= startOfToday && recordedDate < endOfToday;
+      }).length;
     },
   },
 };

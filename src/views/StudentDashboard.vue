@@ -154,6 +154,12 @@ export default {
       const date = new Date(isoString);
       return new Intl.DateTimeFormat('en-US', { year: 'numeric', month: 'long', day: 'numeric', hour: 'numeric', minute: 'numeric', second: 'numeric' }).format(date);
     },
+    calculateDueDate(isoString) {
+      if (!isoString) return null;
+      const date = new Date(isoString);
+      date.setDate(date.getDate() + 3);
+      return date.toISOString();
+    },
     showDetails(student) {
       this.selectedStudent = { ...student };
       this.selectedStudent.status = student.statusreal ? 'Settled' : 'Unsettled';
@@ -191,7 +197,6 @@ export default {
               statusreal,
               image_url,
               date_settled,
-              due_date,
               frequency,
               updated_at,
               violation_category: violation_categories (name),
@@ -206,6 +211,7 @@ export default {
             this.activityLogs = data.map(log => ({
               ...log,
               violation_category: log.violation_category?.name || 'Unknown',
+              due_date: !log.statusreal ? this.calculateDueDate(log.date_recorded) : null, // Calculate due date for unsettled violations
             }));
           }
         } catch (err) {

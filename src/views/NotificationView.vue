@@ -53,7 +53,7 @@
 </template>
 
 <script>
-import { ref, computed, onMounted } from 'vue';
+import { ref, computed, onMounted, onUnmounted } from 'vue';
 import moment from 'moment';
 import supabase from '@/components/Supabase'; // Adjust the import path if needed
 
@@ -120,6 +120,8 @@ export default {
               name
             )
           `)
+          .gte('created_at', new Date().toISOString().slice(0, 10) + 'T00:00:00+00:00') // Filter for today's notifications (start of day)
+          .lt('created_at', new Date(new Date().setDate(new Date().getDate() + 1)).toISOString().slice(0, 10) + 'T00:00:00+00:00') // Up to the start of the next day
           .order('created_at', { ascending: false });
 
         if (fetchError) {
