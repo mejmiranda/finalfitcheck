@@ -4,43 +4,52 @@
       <h1>Student Violations</h1>
       <div class="actions">
         <div class="search-bar">
-          <input type="text" placeholder="Search" v-model="searchQuery">
+          <input type="text" placeholder="Search" v-model="searchQuery" />
         </div>
-        <div class="sort-by">
-          <span>Sort by:</span>
-          <select v-model="sortBy">
-            <option value="created_at_desc">Newest</option>
-            <option value="created_at_asc">Oldest</option>
-          </select>
+        <div class="header-controls">
+          <div class="sort-by">
+            <span>Sort by:</span>
+            <select v-model="sortBy">
+              <option value="date_recorded_desc">Newest</option>
+              <option value="date_recorded_asc">Oldest</option>
+            </select>
+          </div>
         </div>
       </div>
     </div>
     <ul class="notifications-list">
-      <li v-for="notification in filteredNotifications" :key="notification.id" class="notification-item" :class="getNotificationClass(notification)">
-        <template v-if="notification.type === 'violation'">
-          <p>
-            <span class="user-name">{{ notification.students?.student_name }}</span> has violated
-            <span class="violation">{{ notification.violation_categories?.name }}</span> on
-            <span class="date">{{ formatDate(notification.created_at) }}</span>; please review and take appropriate action.
-          </p>
-        </template>
-        <template v-else-if="notification.type === 'settled'">
-          <p>
-            <span class="user-name">{{ notification.students?.student_name }}</span> has settled their violation regarding
-            <span class="violation">{{ notification.violation_categories?.name }}</span> on
-            <span class="date">{{ formatDate(notification.date_settled) }}.</span>
-          </p>
-        </template>
-        <template v-else-if="notification.type === 'overdue'">
-          <p class="overdue">
-            <span class="user-name">{{ notification.students?.student_name }}</span> has an overdue violation from
-            <span class="date">{{ formatDate(notification.date_recorded) }}</span> that remains unsettled;
-            <button class="action-button">click to view the violation and notify the student.</button>
-          </p>
-        </template>
-        <template v-else>
-          <p>Unknown notification type.</p>
-        </template>
+      <li
+        v-for="notification in filteredNotifications"
+        :key="notification.id"
+        class="notification-item"
+        :class="getNotificationClass(notification)"
+      >
+        <div class="notification-content">
+          <template v-if="notification.type === 'violation'">
+            <p>
+              <span class="user-name">{{ notification.students?.student_name }}</span> has violated
+              <span class="violation">{{ notification.violation_categories?.name }}</span> on
+              <span class="date">{{ formatDate(notification.created_at) }}</span>;
+            </p>
+          </template>
+          <template v-else-if="notification.type === 'settled'">
+            <p>
+              <span class="user-name">{{ notification.students?.student_name }}</span> has settled their violation
+              regarding
+              <span class="violation">{{ notification.violation_categories?.name }}</span> on
+              <span class="date">{{ formatDate(notification.date_settled) }}.</span>
+            </p>
+          </template>
+          <template v-else-if="notification.type === 'overdue'">
+            <p class="overdue">
+              <span class="user-name">{{ notification.students?.student_name }}</span> has an overdue violation from
+              <span class="date">{{ formatDate(notification.date_recorded) }}</span> that remains unsettled;
+            </p>
+          </template>
+          <template v-else>
+            <p>Unknown notification type.</p>
+          </template>
+        </div>
       </li>
       <li v-if="filteredNotifications.length === 0 && !loading">
         <p class="empty-message">No notifications found.</p>
@@ -60,40 +69,51 @@ import supabase from '@/components/Supabase'; // Adjust the import path if neede
 export default {
   setup() {
     const searchQuery = ref('');
-    const sortBy = ref('created_at_desc');
+    const sortBy = ref('date_recorded_desc'); // Default sort
+    const bulkAction = ref('');
     const notifications = ref([]);
     const loading = ref(false);
     const error = ref(null);
 
     const filteredNotifications = computed(() => {
-      return notifications.value
-        .filter(notification => {
-          const searchTerm = searchQuery.value.toLowerCase();
-          const studentName = notification.students?.student_name?.toLowerCase() || '';
-          const violationName = notification.violation_categories?.name?.toLowerCase() || '';
-          return (
-            studentName.includes(searchTerm) ||
-            violationName.includes(searchTerm)
-          );
-        })
-        .sort((a, b) => {
-          const dateA = new Date(a.created_at);
-          const dateB = new Date(b.created_at);
-          return sortBy.value === 'created_at_desc' ? dateB - dateA : dateA - dateB;
-        });
+      let sortedNotifications = [...notifications.value];
+
+      if (sortBy.value === 'date_recorded_desc') {
+        sortedNotifications.sort((a, b) => new Date(b.date_recorded || b.date_settled || b.created_at) - new Date(a.date_recorded || a.date_settled || a.created_at));
+      } else if (sortBy.value === 'date_recorded_asc') {
+        sortedNotifications.sort((a, b) => new Date(a.date_recorded || a.date_settled || a.created_at) - new Date(b.date_recorded || b.date_settled || b.created_at));
+      } else if (sortBy.value === 'is_read_asc') {
+        sortedNotifications.sort((a, b) => (a.is_read ? 1 : -1) - (b.is_read ? 1 : -1));
+      } else if (sortBy.value === 'is_read_desc') {
+        sortedNotifications.sort((a, b) => (a.is_read ? -1 : 1) - (b.is_read ? -1 : 1));
+      }
+
+      return sortedNotifications.filter((notification) => {
+        const searchTerm = searchQuery.value.toLowerCase();
+        const studentName = notification.students?.student_name?.toLowerCase() || '';
+        const violationName = notification.violation_categories?.name?.toLowerCase() || '';
+        return (
+          studentName.includes(searchTerm) ||
+          violationName.includes(searchTerm)
+        );
+      });
     });
 
     const formatDate = (date) => {
-      return moment(date).format('YYYY-MM-DD HH:mm:ss');
+      return date ? moment(date).format('YYYY-MM-DD HH:mm:ss') : 'N/A';
     };
 
     const getNotificationClass = (notification) => {
-      if (notification.type === 'violation') {
-        return 'new'; // You might want to base this on a 'is_read' status or similar
-      } else if (notification.type === 'settled') {
+      if (!notification.statusreal && notification.date_recorded) {
+        const threeDaysAfterRecord = moment(notification.date_recorded).add(3, 'days');
+        if (moment().isAfter(threeDaysAfterRecord)) {
+          return 'overdue';
+        }
+        return 'new'; // Consider as new if not settled and not overdue
+      } else if (notification.statusreal && notification.date_settled) {
         return 'settled';
-      } else if (notification.type === 'overdue') {
-        return 'overdue';
+      } else if (notification.is_read) {
+        return 'read';
       }
       return '';
     };
@@ -103,16 +123,12 @@ export default {
       error.value = null;
       try {
         const { data, error: fetchError } = await supabase
-          .from('notifications')
+          .from('activity_logs')
           .select(`
             id,
-            title,
-            message,
-            type,
-            is_read,
-            created_at,
-            date_settled,
             date_recorded,
+            date_settled,
+            statusreal,
             students (
               student_name
             ),
@@ -120,19 +136,137 @@ export default {
               name
             )
           `)
-          .order('created_at', { ascending: false });
+          .order('date_recorded', { ascending: false });
 
         if (fetchError) {
-          console.error('Error fetching notifications:', fetchError);
+          console.error('Error fetching activity logs:', fetchError);
           error.value = fetchError.message;
         } else {
-          notifications.value = data;
+          notifications.value = data.map(log => ({
+            id: log.id,
+            type: log.statusreal && log.date_settled ? 'settled' : (!log.statusreal && log.date_recorded && moment().isAfter(moment(log.date_recorded).add(3, 'days')) ? 'overdue' : 'violation'),
+            created_at: log.date_recorded,
+            date_settled: log.date_settled,
+            date_recorded: log.date_recorded,
+            students: log.students,
+            violation_categories: log.violation_categories,
+            is_read: !!(log.statusreal && log.date_settled),
+            statusreal: log.statusreal,
+          }));
         }
       } catch (err) {
-        console.error('Unexpected error fetching notifications:', err);
+        console.error('Unexpected error fetching activity logs:', err);
         error.value = err.message;
       } finally {
         loading.value = false;
+      }
+    };
+
+    const markAsRead = async (id) => {
+      try {
+        const { error: updateError } = await supabase
+          .from('activity_logs')
+          .update({ statusreal: true, date_settled: new Date() })
+          .eq('id', id);
+
+        if (updateError) {
+          console.error('Error marking as settled:', updateError);
+          alert('Failed to mark as settled.');
+        } else {
+          const index = notifications.value.findIndex((n) => n.id === id);
+          if (index !== -1) {
+            notifications.value[index].statusreal = true;
+            notifications.value[index].date_settled = new Date();
+            notifications.value[index].is_read = true;
+            notifications.value[index].type = 'settled';
+          }
+        }
+      } catch (err) {
+        console.error('Unexpected error marking as settled:', err);
+        alert('An unexpected error occurred while marking as settled.');
+      }
+    };
+
+    const markAsUnread = async (id) => {
+      try {
+        const { error: updateError } = await supabase
+          .from('activity_logs')
+          .update({ statusreal: false, date_settled: null })
+          .eq('id', id);
+
+        if (updateError) {
+          console.error('Error marking as unsettled:', updateError);
+          alert('Failed to mark as unsettled.');
+        } else {
+          const index = notifications.value.findIndex((n) => n.id === id);
+          if (index !== -1) {
+            notifications.value[index].statusreal = false;
+            notifications.value[index].date_settled = null;
+            notifications.value[index].is_read = false;
+            notifications.value[index].type = 'violation';
+          }
+        }
+      } catch (err) {
+        console.error('Unexpected error marking as unsettled:', err);
+        alert('An unexpected error occurred while marking as unsettled.');
+      }
+    };
+
+    const applyBulkAction = async () => {
+      if (bulkAction.value === 'read') {
+        const unreadNotifications = notifications.value.filter(n => !n.is_read);
+        if (unreadNotifications.length > 0) {
+          loading.value = true;
+          try {
+            const idsToUpdate = unreadNotifications.map(n => n.id);
+            const { error: bulkUpdateError } = await supabase
+              .from('activity_logs')
+              .update({ statusreal: true, date_settled: new Date() })
+              .in('id', idsToUpdate);
+
+            if (bulkUpdateError) {
+              console.error('Error marking all as read:', bulkUpdateError);
+              alert('Failed to mark all as read.');
+            } else {
+              notifications.value = notifications.value.map(n => ({ ...n, is_read: true, statusreal: true, date_settled: n.date_settled || new Date(), type: 'settled' }));
+            }
+          } catch (err) {
+            console.error('Unexpected error marking all as read:', err);
+            alert('An unexpected error occurred while marking all as read.');
+          } finally {
+            loading.value = false;
+            bulkAction.value = '';
+          }
+        } else {
+          alert('No unread notifications to mark as read.');
+        }
+      } else if (bulkAction.value === 'unread') {
+        const readNotifications = notifications.value.filter(n => n.is_read);
+        if (readNotifications.length > 0) {
+          loading.value = true;
+          try {
+            const idsToUpdate = readNotifications.map(n => n.id);
+            const { error: bulkUpdateError } = await supabase
+              .from('activity_logs')
+              .update({ statusreal: false, date_settled: null })
+              .in('id', idsToUpdate);
+
+            if (bulkUpdateError) {
+              console.error('Error marking all as unread:', bulkUpdateError);
+              alert('Failed to mark all as unread.');
+            } else {
+              notifications.value = notifications.value.map(n => ({ ...n, is_read: false, statusreal: false, date_settled: null, type: 'violation' }));
+            }
+          } catch (err) {
+            console.error('Unexpected error marking all as unread:', err);
+            alert('An unexpected error occurred while marking all as unread.');
+          } finally {
+            loading.value = false;
+            bulkAction.value = '';
+          }
+        } else {
+          alert('No read notifications to mark as unread.');
+        }
       }
     };
 
@@ -141,18 +275,23 @@ export default {
     return {
       searchQuery,
       sortBy,
+      bulkAction,
       notifications,
       filteredNotifications,
       formatDate,
       getNotificationClass,
       loading,
       error,
+      markAsRead,
+      markAsUnread,
+      applyBulkAction,
     };
   },
 };
 </script>
 
 <style scoped>
+/* Existing styles */
 .notifications-container {
   font-family: sans-serif;
   padding: 20px;
@@ -181,6 +320,31 @@ export default {
   border-radius: 4px;
 }
 
+.header-controls {
+  display: flex;
+  gap: 20px;
+  align-items: center;
+}
+
+.mark-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.mark-actions select,
+.mark-actions button {
+  padding: 8px;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.mark-actions button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 .sort-by {
   display: flex;
   align-items: center;
@@ -204,6 +368,14 @@ export default {
   border-radius: 4px;
   padding: 15px;
   margin-bottom: 10px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center; /* Align content and actions vertically */
+}
+
+.notification-content {
+  flex-grow: 1; /* Allow content to take up more space */
+  margin-right: 10px; /* Space between content and actions */
 }
 
 .notification-item.new {
@@ -216,6 +388,18 @@ export default {
 
 .notification-item.overdue {
   border-left: 5px solid #dc3545; /* Example for overdue violations */
+}
+
+.notification-item.read {
+  background-color: #f0f0f0; /* Example styling for read notifications */
+  color: #777;
+}
+
+.notification-item.read .user-name,
+.notification-item.read .violation {
+  font-weight: normal;
+  font-style: normal;
+  color: #777;
 }
 
 .user-name {
@@ -249,4 +433,15 @@ export default {
   color: #999;
   padding: 15px;
 }
+
+.notification-actions button {
+  padding: 8px 12px;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 0.9em;
+  margin-left: 5px;
+}
+
+
 </style>
