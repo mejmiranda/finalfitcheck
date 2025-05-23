@@ -20,15 +20,30 @@
         liability in your portal.
       </p>
       <p v-if="!isFullscreen">Thank you for your cooperation!</p>
+      
+      <!-- Loading indicator for video -->
+      <div v-if="videoLoading && !isFullscreen" class="video-loading">
+        <div class="loading-spinner"></div>
+        <p>Loading video... Please wait.</p>
+      </div>
+      
       <div class="video-container">
         <video
           ref="violationVideo"
           width="100%"
           height="100%"
+          preload="auto"
+          crossorigin="anonymous"
           @play="handlePlay"
           @seeked="handleSeeked"
           @pause="handlePause"
           @ended="handleVideoEnded"
+          @loadstart="handleLoadStart"
+          @loadeddata="handleLoadedData"
+          @canplay="handleCanPlay"
+          @waiting="handleWaiting"
+          @playing="handlePlaying"
+          @error="handleVideoError"
         >
           <source :src="videoUrl" type="video/mp4" />
           Your browser does not support the video tag.
@@ -45,14 +60,13 @@
 <script setup>
 import { ref, onMounted, onBeforeUnmount, watch } from 'vue';
 import { useRouter, useRoute } from 'vue-router';
-import supabase from '@/components/Supabase'; // Ensure the path is correct
+import supabase from '@/components/Supabase';
 
 const router = useRouter();
 const route = useRoute();
 
-// Use environment variable for video URL
-// Add this near the top of your script section
-const videoUrl = ref('https://e8fomgss4r3a2uv5.public.blob.vercel-storage.com/video_violations-TdmUiyMfkcsUrSVWrYWZss08B0GnmU.mp4');
+// Updated video URL
+const videoUrl = ref('https://e8fomgss4r3a2uv5.public.blob.vercel-storage.com/video_violations-tcUW7LLerpiqKEcOIPIZTVesHhS2KP.mp4');
 
 const violationId = ref(null);
 const violationDetails = ref(null);
@@ -64,180 +78,51 @@ const isTabActive = ref(true);
 const loading = ref(true);
 const errorMessage = ref(null);
 const isFullscreen = ref(false);
-const blockKeys = ref(false); // New ref to control key blocking
+const blockKeys = ref(false);
+const videoLoading = ref(true);
 
 // Ref to hold the fullscreen change listener so we can remove it
 const fullscreenChangeListener = ref(null);
 const visibilityChangeListener = ref(null);
 const keydownListener = ref(null);
 
-// Attach the global key blocker on component mount (after video element is available)
-watch(violationVideo, (newVideo) => {
-  if (newVideo) {
-    window.addEventListener('keydown', globalKeyBlocker);
-  }
-});
-
-onMounted(async () => {
-  violationId.value = route.params.violationId;
-  console.log('SettleViolation - Route params violationId:', route.params.violationId);
-  await fetchViolationDetails();
-
-  // Setup video listeners when violation details are loaded and the video element exists
-  if (violationDetails.value && violationVideo.value) {
-    violationVideo.value.addEventListener('loadedmetadata', () => {
-      videoDuration.value = violationVideo.value.duration;
-      // Request fullscreen after metadata is loaded
-      requestFullscreen();
-    });
-
-    // Start playing the video automatically
-    violationVideo.value.autoplay = true;
-
-    // Prevent exiting fullscreen manually
-    fullscreenChangeListener.value = handleFullscreenChange;
-    document.addEventListener('fullscreenchange', fullscreenChangeListener.value);
-    document.addEventListener('webkitfullscreenchange', fullscreenChangeListener.value);
-    document.addEventListener('mozfullscreenchange', fullscreenChangeListener.value);
-    document.addEventListener('MSFullscreenChange', fullscreenChangeListener.value);
-
-    // Prevent default exit on keydown while fullscreen
-    keydownListener.value = preventFullscreenExit;
-    window.addEventListener('keydown', keydownListener.value);
-
-    // Check for tab focus changes
-    visibilityChangeListener.value = handleVisibilityChange;
-    document.addEventListener('visibilitychange', visibilityChangeListener.value);
-
-    // Start blocking keys when the video starts playing
-    violationVideo.value.addEventListener('play', () => {
-      blockKeys.value = true;
-    });
-  }
-});
-
-onBeforeUnmount(() => {
-  // Clean up event listeners
-  if (fullscreenChangeListener.value) {
-    document.removeEventListener('fullscreenchange', fullscreenChangeListener.value);
-    document.removeEventListener('webkitfullscreenchange', fullscreenChangeListener.value);
-    document.removeEventListener('mozfullscreenchange', fullscreenChangeListener.value);
-    document.removeEventListener('MSFullscreenChange', fullscreenChangeListener.value);
-  }
-  if (keydownListener.value) {
-    window.removeEventListener('keydown', keydownListener.value);
-  }
-  if (visibilityChangeListener.value) {
-    document.removeEventListener('visibilitychange', visibilityChangeListener.value);
-  }
-  window.removeEventListener('keydown', globalKeyBlocker); // Ensure global key blocker is removed
-});
-
-const requestFullscreen = () => {
-  const video = violationVideo.value;
-  if (video) {
-    if (video.requestFullscreen) {
-      video.requestFullscreen();
-    } else if (video.webkitRequestFullscreen) { /* Safari */
-      video.webkitRequestFullscreen();
-    } else if (video.msRequestFullscreen) { /* IE11 */
-      video.msRequestFullscreen();
-    }
-    isFullscreen.value = true;
-  }
+// Video loading event handlers
+const handleLoadStart = () => {
+  videoLoading.value = true;
+  console.log('Video loading started');
 };
 
-const exitFullscreen = () => {
-  if (document.exitFullscreen) {
-    document.exitFullscreen();
-  } else if (document.webkitExitFullscreen) { /* Safari */
-    document.webkitExitFullscreen();
-  } else if (document.mozCancelFullScreen) { /* Firefox */
-    document.mozCancelFullScreen();
-  } else if (document.msExitFullscreen) { /* IE11 */
-    document.msExitFullscreen();
-  }
-  isFullscreen.value = false;
+const handleLoadedData = () => {
+  console.log('Video data loaded');
 };
 
-const handleFullscreenChange = () => {
-  isFullscreen.value = !!(document.fullscreenElement || document.webkitFullscreenElement || document.mozFullScreenElement || document.msFullscreenElement);
-  // If exiting fullscreen manually before the video is done, re-enter fullscreen
-  if (!isFullscreen.value && !isVideoDone.value) {
-    // Use a slight delay to avoid immediate re-entry if the user quickly tries to switch tabs
-    setTimeout(requestFullscreen, 100);
-  }
+const handleCanPlay = () => {
+  videoLoading.value = false;
+  console.log('Video can start playing');
 };
 
-const preventFullscreenExit = (event) => {
-  // Prevent ESC key and other fullscreen exit keys if video is not done
-  if (!isVideoDone.value && (event.key === 'Escape' || event.keyCode === 27 || event.key === 'F11' || event.keyCode === 122)) {
-    event.preventDefault();
-  } else if (isVideoDone.value && isFullscreen.value && (event.key === 'Escape' || event.keyCode === 27 || event.key === 'F11' || event.keyCode === 122)) {
-    exitFullscreen();
-  }
+const handleWaiting = () => {
+  console.log('Video is buffering');
 };
 
-const handleVisibilityChange = () => {
-  isTabActive.value = !document.hidden;
-  if (!isTabActive.value && violationVideo.value && !violationVideo.value.paused && !isVideoDone.value && isFullscreen.value) {
-    violationVideo.value.pause();
-  } else if (isTabActive.value && violationVideo.value && violationVideo.value.paused && !isVideoDone.value && isFullscreen.value) {
-    violationVideo.value.play();
-  }
+const handlePlaying = () => {
+  videoLoading.value = false;
+  console.log('Video is playing');
 };
 
-const handlePlay = () => {
-  if (violationVideo.value.currentTime < lastPlayedTime.value) {
-    // User tried to seek backward
-    violationVideo.value.currentTime = lastPlayedTime.value;
-  }
+const handleVideoError = (event) => {
+  console.error('Video error:', event);
+  errorMessage.value = 'Failed to load video. Please check your internet connection.';
 };
 
-const handleSeeked = () => {
-  if (violationVideo.value.currentTime < lastPlayedTime.value) {
-    violationVideo.value.currentTime = lastPlayedTime.value;
-  } else if (violationVideo.value.currentTime > lastPlayedTime.value + 1) {
-    violationVideo.value.currentTime = lastPlayedTime.value;
-  }
-};
-
-const handlePause = () => {
-  lastPlayedTime.value = violationVideo.value.currentTime;
-};
-
-const globalKeyBlocker = (event) => {
-  if (blockKeys.value && !isVideoDone.value) {
-    event.preventDefault();
-  }
-};
-
-const handleTimeUpdate = () => {
-  if (violationVideo.value && !violationVideo.value.seeking) {
-    lastPlayedTime.value = Math.max(lastPlayedTime.value, violationVideo.value.currentTime);
-    if (Math.abs(violationVideo.value.currentTime - videoDuration.value) < 0.5 && videoDuration.value > 0) {
-      isVideoDone.value = true;
-      exitFullscreen();
-      removeFullscreenBlockers();
-      blockKeys.value = false; // Stop blocking keys
-      window.removeEventListener('keydown', globalKeyBlocker);
-      violationVideo.value.removeEventListener('timeupdate', handleTimeUpdate);
-    }
-  }
-};
-
-const handleVideoEnded = () => {
-  isVideoDone.value = true;
-  exitFullscreen();
-  removeFullscreenBlockers();
-  blockKeys.value = false; // Stop blocking keys
-  window.removeEventListener('keydown', globalKeyBlocker);
-  violationVideo.value.removeEventListener('timeupdate', handleTimeUpdate);
-};
-
-const attachTimeUpdateListener = () => {
+// Preload video when component mounts
+const preloadVideo = () => {
   if (violationVideo.value) {
-    violationVideo.value.addEventListener('timeupdate', handleTimeUpdate);
+    // Set buffer size for better streaming
+    violationVideo.value.preload = 'auto';
+    
+    // Start loading the video
+    violationVideo.value.load();
   }
 };
 
@@ -316,13 +201,190 @@ const removeFullscreenBlockers = () => {
     keydownListener.value = null;
   }
 };
+
+const requestFullscreen = () => {
+  const video = violationVideo.value;
+  if (video && video.readyState >= 3) { // Only if video is ready
+    if (video.requestFullscreen) {
+      video.requestFullscreen();
+    } else if (video.webkitRequestFullscreen) {
+      video.webkitRequestFullscreen();
+    } else if (video.msRequestFullscreen) {
+      video.msRequestFullscreen();
+    }
+    isFullscreen.value = true;
+    
+    // Start playing once in fullscreen
+    video.play().catch(console.error);
+  }
+};
+
+const exitFullscreen = () => {
+  if (document.exitFullscreen) {
+    document.exitFullscreen();
+  } else if (document.webkitExitFullscreen) {
+    document.webkitExitFullscreen();
+  } else if (document.mozCancelFullScreen) {
+    document.mozCancelFullScreen();
+  } else if (document.msExitFullscreen) {
+    document.msExitFullscreen();
+  }
+  isFullscreen.value = false;
+};
+
+const handleFullscreenChange = () => {
+  isFullscreen.value = !!(document.fullscreenElement || document.webkitFullscreenElement || document.mozFullScreenElement || document.msFullscreenElement);
+  if (!isFullscreen.value && !isVideoDone.value) {
+    setTimeout(requestFullscreen, 100);
+  }
+};
+
+const preventFullscreenExit = (event) => {
+  if (!isVideoDone.value && (event.key === 'Escape' || event.keyCode === 27 || event.key === 'F11' || event.keyCode === 122)) {
+    event.preventDefault();
+  } else if (isVideoDone.value && isFullscreen.value && (event.key === 'Escape' || event.keyCode === 27 || event.key === 'F11' || event.keyCode === 122)) {
+    exitFullscreen();
+  }
+};
+
+const handleVisibilityChange = () => {
+  isTabActive.value = !document.hidden;
+  if (!isTabActive.value && violationVideo.value && !violationVideo.value.paused && !isVideoDone.value && isFullscreen.value) {
+    violationVideo.value.pause();
+  } else if (isTabActive.value && violationVideo.value && violationVideo.value.paused && !isVideoDone.value && isFullscreen.value) {
+    violationVideo.value.play();
+  }
+};
+
+const handlePlay = () => {
+  if (violationVideo.value.currentTime < lastPlayedTime.value) {
+    violationVideo.value.currentTime = lastPlayedTime.value;
+  }
+};
+
+const handleSeeked = () => {
+  if (violationVideo.value.currentTime < lastPlayedTime.value) {
+    violationVideo.value.currentTime = lastPlayedTime.value;
+  } else if (violationVideo.value.currentTime > lastPlayedTime.value + 1) {
+    violationVideo.value.currentTime = lastPlayedTime.value;
+  }
+};
+
+const handlePause = () => {
+  lastPlayedTime.value = violationVideo.value.currentTime;
+};
+
+const globalKeyBlocker = (event) => {
+  if (blockKeys.value && !isVideoDone.value) {
+    event.preventDefault();
+  }
+};
+
+const handleTimeUpdate = () => {
+  if (violationVideo.value && !violationVideo.value.seeking) {
+    lastPlayedTime.value = Math.max(lastPlayedTime.value, violationVideo.value.currentTime);
+    if (Math.abs(violationVideo.value.currentTime - videoDuration.value) < 0.5 && videoDuration.value > 0) {
+      isVideoDone.value = true;
+      exitFullscreen();
+      removeFullscreenBlockers();
+      blockKeys.value = false;
+      window.removeEventListener('keydown', globalKeyBlocker);
+      violationVideo.value.removeEventListener('timeupdate', handleTimeUpdate);
+    }
+  }
+};
+
+const handleVideoEnded = () => {
+  isVideoDone.value = true;
+  exitFullscreen();
+  removeFullscreenBlockers();
+  blockKeys.value = false;
+  window.removeEventListener('keydown', globalKeyBlocker);
+  violationVideo.value.removeEventListener('timeupdate', handleTimeUpdate);
+};
+
+const attachTimeUpdateListener = () => {
+  if (violationVideo.value) {
+    violationVideo.value.addEventListener('timeupdate', handleTimeUpdate);
+  }
+};
+
+const setupVideoListeners = () => {
+  if (violationDetails.value && violationVideo.value) {
+    // Preload the video
+    preloadVideo();
+    
+    violationVideo.value.addEventListener('loadedmetadata', () => {
+      videoDuration.value = violationVideo.value.duration;
+      // Only request fullscreen after video is ready to play
+      if (violationVideo.value.readyState >= 3) { // HAVE_FUTURE_DATA
+        requestFullscreen();
+      }
+    });
+
+    // Start playing the video automatically when it's ready
+    violationVideo.value.addEventListener('canplaythrough', () => {
+      if (!isFullscreen.value) {
+        requestFullscreen();
+      }
+    });
+
+    // Prevent exiting fullscreen manually
+    fullscreenChangeListener.value = handleFullscreenChange;
+    document.addEventListener('fullscreenchange', fullscreenChangeListener.value);
+    document.addEventListener('webkitfullscreenchange', fullscreenChangeListener.value);
+    document.addEventListener('mozfullscreenchange', fullscreenChangeListener.value);
+    document.addEventListener('MSFullscreenChange', fullscreenChangeListener.value);
+
+    // Prevent default exit on keydown while fullscreen
+    keydownListener.value = preventFullscreenExit;
+    window.addEventListener('keydown', keydownListener.value);
+
+    // Check for tab focus changes
+    visibilityChangeListener.value = handleVisibilityChange;
+    document.addEventListener('visibilitychange', visibilityChangeListener.value);
+
+    // Start blocking keys when the video starts playing
+    violationVideo.value.addEventListener('play', () => {
+      blockKeys.value = true;
+    });
+
+    // Attach time update listener
+    attachTimeUpdateListener();
+  }
+};
+
+onMounted(async () => {
+  violationId.value = route.params.violationId;
+  console.log('SettleViolation - Route params violationId:', route.params.violationId);
+  await fetchViolationDetails();
+
+  // Setup video listeners when violation details are loaded and the video element exists
+  setupVideoListeners();
+});
+
+onBeforeUnmount(() => {
+  // Clean up event listeners
+  if (fullscreenChangeListener.value) {
+    document.removeEventListener('fullscreenchange', fullscreenChangeListener.value);
+    document.removeEventListener('webkitfullscreenchange', fullscreenChangeListener.value);
+    document.removeEventListener('mozfullscreenchange', fullscreenChangeListener.value);
+    document.removeEventListener('MSFullscreenChange', fullscreenChangeListener.value);
+  }
+  if (keydownListener.value) {
+    window.removeEventListener('keydown', keydownListener.value);
+  }
+  if (visibilityChangeListener.value) {
+    document.removeEventListener('visibilitychange', visibilityChangeListener.value);
+  }
+  window.removeEventListener('keydown', globalKeyBlocker);
+});
 </script>
 
 <style scoped>
-/* Your existing styles */
 .settle-vio {
   padding: 20px;
-  transition: padding 0.3s ease; /* For smooth transition in/out of fullscreen */
+  transition: padding 0.3s ease;
 }
 
 .settle-vio.fullscreen-video {
@@ -333,11 +395,37 @@ const removeFullscreenBlockers = () => {
   display: flex;
   justify-content: center;
   align-items: center;
-  background-color: black; /* Optional: Black background for fullscreen */
-  z-index: 1000; /* Ensure it's on top of other elements */
+  background-color: black;
+  z-index: 1000;
   position: fixed;
   top: 0;
   left: 0;
+}
+
+.video-loading {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 40px;
+  background-color: #f8f9fa;
+  border-radius: 8px;
+  margin: 20px 0;
+}
+
+.loading-spinner {
+  width: 40px;
+  height: 40px;
+  border: 4px solid #f3f3f3;
+  border-top: 4px solid #3498db;
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+  margin-bottom: 15px;
+}
+
+@keyframes spin {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
 }
 
 .header {
@@ -353,8 +441,8 @@ const removeFullscreenBlockers = () => {
   border-radius: 8px;
   margin-bottom: 20px;
   margin-left: 20px;
-  width: 100%; /* Take full width in normal mode */
-  max-width: 640px; /* Limit width in normal mode */
+  width: 100%;
+  max-width: 640px;
 }
 
 .settle-vio.fullscreen-video .student-violations {
@@ -363,7 +451,7 @@ const removeFullscreenBlockers = () => {
   align-items: center;
   width: 100%;
   height: 100%;
-  max-width: none; /* No max width in fullscreen */
+  max-width: none;
   padding: 0;
   border-radius: 0;
   margin-bottom: 0;
@@ -373,10 +461,10 @@ const removeFullscreenBlockers = () => {
   margin-top: 20px;
   border: 1px solid white;
   border-radius: 4px;
-  overflow: hidden; /* To contain the video within the border-radius */
+  overflow: hidden;
   width: 100%;
-  height: auto; /* Adjust height automatically */
-  aspect-ratio: 16 / 9; /* Maintain aspect ratio */
+  height: auto;
+  aspect-ratio: 16 / 9;
 }
 
 .settle-vio.fullscreen-video .video-container {
@@ -388,10 +476,10 @@ const removeFullscreenBlockers = () => {
 }
 
 .video-container video {
-  display: block; /* Prevent extra space below video */
+  display: block;
   width: 100%;
   height: 100%;
-  object-fit: contain; /* Ensure video fits within the container */
+  object-fit: contain;
 }
 
 .video-container video::-webkit-media-controls {
@@ -407,13 +495,13 @@ const removeFullscreenBlockers = () => {
   bottom: 10px;
   right: 10px;
   padding: 10px 20px;
-  background-color: #4CAF50; /* Green for success */
+  background-color: #4CAF50;
   color: white;
   border: none;
   border-radius: 5px;
   cursor: pointer;
   font-size: 16px;
-  z-index: 1001; /* Ensure it's above the fullscreen video */
+  z-index: 1001;
 }
 
 .done-button:disabled {
