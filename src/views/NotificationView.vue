@@ -39,8 +39,7 @@
             <p>
               <span class="user-name">{{ notification.students?.student_name }}</span> has settled their violation
               regarding
-              <span class="violation">{{ notification.violation_categories?.name }}</span> on
-              <span class="date">{{ formatDate(notification.date_settled) }}.</span>
+              <span class="violation">{{ notification.violation_categories?.name }}</span>
             </p>
           </template>
           <template v-else-if="notification.type === 'overdue'">
@@ -103,7 +102,7 @@ export default {
     });
 
     const formatDate = (date) => {
-      return date ? moment(date).utcOffset('+08:00').format('YYYY-MM-DD h:mm:ss A') : 'N/A';
+      return date ? moment(date).utcOffset('+08:00').format('YYYY-MM-DD h:mm:ss A') : '';
     };
 
     const getNotificationClass = (notification) => {
