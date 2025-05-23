@@ -1,7 +1,7 @@
 <template>
   <div class="settle-vio" :class="{ 'fullscreen-video': isFullscreen }">
     <div v-if="loading">Loading violation details...</div>
-    <div v-else-if="error">Error loading violation details: {{ error }}</div>
+    <div v-else-if="errorMessage">Error loading violation details: {{ errorMessage }}</div>
     <div v-else-if="violationDetails" class="student-violations">
       <div
         v-if="!isFullscreen"
@@ -30,13 +30,13 @@
           @pause="handlePause"
           @ended="handleVideoEnded"
         >
-          <source src="@/assets/video_violations.mp4" type="video/mp4" />
+          <source :src="videoUrl" type="video/mp4" />
           Your browser does not support the video tag.
         </video>
         <button v-if="isVideoDone && !isFullscreen" @click="markViolationAsDone" class="done-button">Done</button>
       </div>
     </div>
-    <div v-else-if="!loading && !error && !isFullscreen">
+    <div v-else-if="!loading && !errorMessage && !isFullscreen">
       <p>No unresolved violation details found for this ID.</p>
     </div>
   </div>
@@ -50,6 +50,10 @@ import supabase from '@/components/Supabase'; // Ensure the path is correct
 const router = useRouter();
 const route = useRoute();
 
+// Use environment variable for video URL
+// Add this near the top of your script section
+const videoUrl = ref('https://e8fomgss4r3a2uv5.public.blob.vercel-storage.com/video_violations-TdmUiyMfkcsUrSVWrYWZss08B0GnmU.mp4');
+
 const violationId = ref(null);
 const violationDetails = ref(null);
 const violationVideo = ref(null);
@@ -58,7 +62,7 @@ const videoDuration = ref(0);
 const lastPlayedTime = ref(0);
 const isTabActive = ref(true);
 const loading = ref(true);
-const error = ref(null);
+const errorMessage = ref(null);
 const isFullscreen = ref(false);
 const blockKeys = ref(false); // New ref to control key blocking
 
@@ -66,6 +70,13 @@ const blockKeys = ref(false); // New ref to control key blocking
 const fullscreenChangeListener = ref(null);
 const visibilityChangeListener = ref(null);
 const keydownListener = ref(null);
+
+// Attach the global key blocker on component mount (after video element is available)
+watch(violationVideo, (newVideo) => {
+  if (newVideo) {
+    window.addEventListener('keydown', globalKeyBlocker);
+  }
+});
 
 onMounted(async () => {
   violationId.value = route.params.violationId;
@@ -232,7 +243,7 @@ const attachTimeUpdateListener = () => {
 
 const fetchViolationDetails = async () => {
   loading.value = true;
-  error.value = null;
+  errorMessage.value = null;
   const studentId = localStorage.getItem('authToken');
   console.log('SettleViolation - Auth Token:', studentId);
 
@@ -251,19 +262,19 @@ const fetchViolationDetails = async () => {
 
       if (dbError) {
         console.error('Error fetching violation details:', dbError);
-        error.value = 'Failed to load violation details.';
+        errorMessage.value = 'Failed to load violation details.';
       } else {
         violationDetails.value = data;
       }
     } catch (err) {
       console.error('An unexpected error occurred:', err);
-      error.value = 'An unexpected error occurred.';
+      errorMessage.value = 'An unexpected error occurred.';
     } finally {
       loading.value = false;
     }
   } else {
     loading.value = false;
-    error.value = 'Invalid parameters.';
+    errorMessage.value = 'Invalid parameters.';
   }
 };
 
@@ -305,13 +316,6 @@ const removeFullscreenBlockers = () => {
     keydownListener.value = null;
   }
 };
-
-// Attach the global key blocker on component mount (after video element is available)
-watch(violationVideo, (newVideo) => {
-  if (newVideo) {
-    window.addEventListener('keydown', globalKeyBlocker);
-  }
-});
 </script>
 
 <style scoped>
