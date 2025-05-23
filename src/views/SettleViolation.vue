@@ -1,7 +1,7 @@
 <template>
   <div class="settle-vio" :class="{ 'fullscreen-video': isFullscreen }">
     <div v-if="loading">Loading violation details...</div>
-    <div v-else-if="error">Error loading violation details: {{ error }}</div>
+    <div v-else-if="errorMessage">Error loading violation details: {{ errorMessage }}</div>
     <div v-else-if="violationDetails" class="student-violations">
       <div
         v-if="!isFullscreen"
@@ -29,14 +29,20 @@
           @seeked="handleSeeked"
           @pause="handlePause"
           @ended="handleVideoEnded"
+          preload="metadata"
+          controlsList="nodownload"
         >
-          <source src="@/assets/video_violations.mp4" type="video/mp4" />
+          <source :src="videoUrl" type="video/mp4" />
           Your browser does not support the video tag.
         </video>
+        <div v-if="videoLoading" class="video-loading">
+          <div class="spinner"></div>
+          <p>Loading video...</p>
+        </div>
         <button v-if="isVideoDone && !isFullscreen" @click="markViolationAsDone" class="done-button">Done</button>
       </div>
     </div>
-    <div v-else-if="!loading && !error && !isFullscreen">
+    <div v-else-if="!loading && !errorMessage && !isFullscreen">
       <p>No unresolved violation details found for this ID.</p>
     </div>
   </div>
@@ -58,69 +64,54 @@ const videoDuration = ref(0);
 const lastPlayedTime = ref(0);
 const isTabActive = ref(true);
 const loading = ref(true);
-const error = ref(null);
+const errorMessage = ref(null);
 const isFullscreen = ref(false);
-const blockKeys = ref(false); // New ref to control key blocking
+const blockKeys = ref(false);
+const videoLoading = ref(true);
+// Using the provided Vercel Blob URL
+const videoUrl = ref('https://e8fomgss4r3a2uv5.public.blob.vercel-storage.com/video_violations-YmUmmhgbz1iKR54kFpUpZxvAB8EtuU.mp4');
 
 // Ref to hold the fullscreen change listener so we can remove it
 const fullscreenChangeListener = ref(null);
 const visibilityChangeListener = ref(null);
 const keydownListener = ref(null);
 
-onMounted(async () => {
-  violationId.value = route.params.violationId;
-  console.log('SettleViolation - Route params violationId:', route.params.violationId);
-  await fetchViolationDetails();
+const fetchViolationDetails = async () => {
+  loading.value = true;
+  errorMessage.value = null;
+  const studentId = localStorage.getItem('authToken');
+  console.log('SettleViolation - Auth Token:', studentId);
 
-  // Setup video listeners when violation details are loaded and the video element exists
-  if (violationDetails.value && violationVideo.value) {
-    violationVideo.value.addEventListener('loadedmetadata', () => {
-      videoDuration.value = violationVideo.value.duration;
-      // Request fullscreen after metadata is loaded
-      requestFullscreen();
-    });
+  if (studentId && route.params.violationId) {
+    try {
+      const { data, error: dbError } = await supabase
+        .from('activity_logs')
+        .select(`
+          id,
+          violation_categories (name)
+        `)
+        .eq('id', route.params.violationId)
+        .eq('student_id', studentId)
+        .eq('statusreal', false)
+        .single();
 
-    // Start playing the video automatically
-    violationVideo.value.autoplay = true;
-
-    // Prevent exiting fullscreen manually
-    fullscreenChangeListener.value = handleFullscreenChange;
-    document.addEventListener('fullscreenchange', fullscreenChangeListener.value);
-    document.addEventListener('webkitfullscreenchange', fullscreenChangeListener.value);
-    document.addEventListener('mozfullscreenchange', fullscreenChangeListener.value);
-    document.addEventListener('MSFullscreenChange', fullscreenChangeListener.value);
-
-    // Prevent default exit on keydown while fullscreen
-    keydownListener.value = preventFullscreenExit;
-    window.addEventListener('keydown', keydownListener.value);
-
-    // Check for tab focus changes
-    visibilityChangeListener.value = handleVisibilityChange;
-    document.addEventListener('visibilitychange', visibilityChangeListener.value);
-
-    // Start blocking keys when the video starts playing
-    violationVideo.value.addEventListener('play', () => {
-      blockKeys.value = true;
-    });
+      if (dbError) {
+        console.error('Error fetching violation details:', dbError);
+        errorMessage.value = 'Failed to load violation details.';
+      } else {
+        violationDetails.value = data;
+      }
+    } catch (err) {
+      console.error('An unexpected error occurred:', err);
+      errorMessage.value = 'An unexpected error occurred.';
+    } finally {
+      loading.value = false;
+    }
+  } else {
+    loading.value = false;
+    errorMessage.value = 'Invalid parameters.';
   }
-});
-
-onBeforeUnmount(() => {
-  // Clean up event listeners
-  if (fullscreenChangeListener.value) {
-    document.removeEventListener('fullscreenchange', fullscreenChangeListener.value);
-    document.removeEventListener('webkitfullscreenchange', fullscreenChangeListener.value);
-    document.removeEventListener('mozfullscreenchange', fullscreenChangeListener.value);
-    document.removeEventListener('MSFullscreenChange', fullscreenChangeListener.value);
-  }
-  if (keydownListener.value) {
-    window.removeEventListener('keydown', keydownListener.value);
-  }
-  if (visibilityChangeListener.value) {
-    document.removeEventListener('visibilitychange', visibilityChangeListener.value);
-  }
-  window.removeEventListener('keydown', globalKeyBlocker); // Ensure global key blocker is removed
-});
+};
 
 const requestFullscreen = () => {
   const video = violationVideo.value;
@@ -230,43 +221,6 @@ const attachTimeUpdateListener = () => {
   }
 };
 
-const fetchViolationDetails = async () => {
-  loading.value = true;
-  error.value = null;
-  const studentId = localStorage.getItem('authToken');
-  console.log('SettleViolation - Auth Token:', studentId);
-
-  if (studentId && route.params.violationId) {
-    try {
-      const { data, error: dbError } = await supabase
-        .from('activity_logs')
-        .select(`
-          id,
-          violation_categories (name)
-        `)
-        .eq('id', route.params.violationId)
-        .eq('student_id', studentId)
-        .eq('statusreal', false)
-        .single();
-
-      if (dbError) {
-        console.error('Error fetching violation details:', dbError);
-        error.value = 'Failed to load violation details.';
-      } else {
-        violationDetails.value = data;
-      }
-    } catch (err) {
-      console.error('An unexpected error occurred:', err);
-      error.value = 'An unexpected error occurred.';
-    } finally {
-      loading.value = false;
-    }
-  } else {
-    loading.value = false;
-    error.value = 'Invalid parameters.';
-  }
-};
-
 const markViolationAsDone = async () => {
   if (!route.params.violationId) {
     alert('Violation ID is missing.');
@@ -311,6 +265,71 @@ watch(violationVideo, (newVideo) => {
   if (newVideo) {
     window.addEventListener('keydown', globalKeyBlocker);
   }
+});
+
+onMounted(async () => {
+  violationId.value = route.params.violationId;
+  console.log('SettleViolation - Route params violationId:', route.params.violationId);
+  await fetchViolationDetails();
+
+  // Setup video listeners when violation details are loaded and the video element exists
+  if (violationDetails.value && violationVideo.value) {
+    // Add loading event listeners
+    violationVideo.value.addEventListener('loadstart', () => {
+      videoLoading.value = true;
+    });
+    
+    violationVideo.value.addEventListener('canplay', () => {
+      videoLoading.value = false;
+    });
+
+    violationVideo.value.addEventListener('loadedmetadata', () => {
+      videoDuration.value = violationVideo.value.duration;
+      videoLoading.value = false;
+      // Request fullscreen after metadata is loaded
+      requestFullscreen();
+    });
+
+    // Attach time update listener
+    attachTimeUpdateListener();
+
+    // Prevent exiting fullscreen manually
+    fullscreenChangeListener.value = handleFullscreenChange;
+    document.addEventListener('fullscreenchange', fullscreenChangeListener.value);
+    document.addEventListener('webkitfullscreenchange', fullscreenChangeListener.value);
+    document.addEventListener('mozfullscreenchange', fullscreenChangeListener.value);
+    document.addEventListener('MSFullscreenChange', fullscreenChangeListener.value);
+
+    // Prevent default exit on keydown while fullscreen
+    keydownListener.value = preventFullscreenExit;
+    window.addEventListener('keydown', keydownListener.value);
+
+    // Check for tab focus changes
+    visibilityChangeListener.value = handleVisibilityChange;
+    document.addEventListener('visibilitychange', visibilityChangeListener.value);
+
+    // Start blocking keys when the video starts playing
+    violationVideo.value.addEventListener('play', () => {
+      blockKeys.value = true;
+    });
+  }
+});
+
+onBeforeUnmount(() => {
+  // Clean up event listeners
+  if (fullscreenChangeListener.value) {
+    document.removeEventListener('fullscreenchange', fullscreenChangeListener.value);
+    document.removeEventListener('webkitfullscreenchange', fullscreenChangeListener.value);
+    document.removeEventListener('mozfullscreenchange', fullscreenChangeListener.value);
+    document.removeEventListener('MSFullscreenChange', fullscreenChangeListener.value);
+  }
+  if (keydownListener.value) {
+    window.removeEventListener('keydown', keydownListener.value);
+  }
+  if (visibilityChangeListener.value) {
+    document.removeEventListener('visibilitychange', visibilityChangeListener.value);
+  }
+  window.removeEventListener('keydown', globalKeyBlocker); // Ensure global key blocker is removed
 });
 </script>
 
@@ -373,6 +392,7 @@ watch(violationVideo, (newVideo) => {
   width: 100%;
   height: auto; /* Adjust height automatically */
   aspect-ratio: 16 / 9; /* Maintain aspect ratio */
+  position: relative; /* For loading overlay */
 }
 
 .settle-vio.fullscreen-video .video-container {
@@ -415,5 +435,36 @@ watch(violationVideo, (newVideo) => {
 .done-button:disabled {
   background-color: #ccc;
   cursor: not-allowed;
+}
+
+/* New styles for loading indicator */
+.video-loading {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  background-color: rgba(0, 0, 0, 0.7);
+  color: white;
+  z-index: 10;
+}
+
+.spinner {
+  border: 4px solid rgba(255, 255, 255, 0.3);
+  border-radius: 50%;
+  border-top: 4px solid white;
+  width: 40px;
+  height: 40px;
+  animation: spin 1s linear infinite;
+  margin-bottom: 10px;
+}
+
+@keyframes spin {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
 }
 </style>
