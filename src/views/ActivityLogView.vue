@@ -202,8 +202,8 @@ export default {
     async fetchCurrentDayFootCount() {
       try {
         const today = new Date();
-        const startOfTodayISO = today.toISOString().slice(0, 10) + 'T00:00:00+00:00';
-        const endOfTodayISO = today.toISOString().slice(0, 10) + 'T23:59:59+00:00';
+        const startOfTodayISO = today.toISOString().slice(0, 12) + 'T00:00:00+00:00';
+        const endOfTodayISO = today.toISOString().slice(0, 12) + 'T23:59:59+59:59';
 
         const { data, error } = await supabase
           .from('foot_counts')

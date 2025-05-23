@@ -69,7 +69,7 @@ const isFullscreen = ref(false);
 const blockKeys = ref(false);
 const videoLoading = ref(true);
 // Using the provided Vercel Blob URL
-const videoUrl = ref('https://e8fomgss4r3a2uv5.public.blob.vercel-storage.com/video_violations-YmUmmhgbz1iKR54kFpUpZxvAB8EtuU.mp4');
+const videoUrl = ref('https://e8fomgss4r3a2uv5.public.blob.vercel-storage.com/video_violations.mp4');
 
 // Ref to hold the fullscreen change listener so we can remove it
 const fullscreenChangeListener = ref(null);
