@@ -1,7 +1,7 @@
 <template>
   <div class="settle-vio" :class="{ 'fullscreen-video': isFullscreen }">
     <div v-if="loading">Loading violation details...</div>
-    <div v-else-if="error">Error loading violation details: {{ error }}</div>
+    <div v-else-if="errorMessage">Error loading violation details: {{ errorMessage }}</div>
     <div v-else-if="violationDetails" class="student-violations">
       <div
         v-if="!isFullscreen"
@@ -29,14 +29,15 @@
           @seeked="handleSeeked"
           @pause="handlePause"
           @ended="handleVideoEnded"
+          crossorigin="anonymous"
         >
-          <source src="/video_violations.mp4" type="video/mp4" />
+          <source src="https://nnmqgnqghavkzsktcilw.supabase.co/storage/v1/object/public/reorientation//video_violations.mp4" type="video/mp4" />
           Your browser does not support the video tag.
         </video>
         <button v-if="isVideoDone && !isFullscreen" @click="markViolationAsDone" class="done-button">Done</button>
       </div>
     </div>
-    <div v-else-if="!loading && !error && !isFullscreen">
+    <div v-else-if="!loading && !errorMessage && !isFullscreen">
       <p>No unresolved violation details found for this ID.</p>
     </div>
   </div>
@@ -58,7 +59,7 @@ const videoDuration = ref(0);
 const lastPlayedTime = ref(0);
 const isTabActive = ref(true);
 const loading = ref(true);
-const error = ref(null);
+const errorMessage = ref(null); // Renamed to avoid conflict with the built-in error object
 const isFullscreen = ref(false);
 const blockKeys = ref(false); // New ref to control key blocking
 
@@ -236,7 +237,7 @@ const attachTimeUpdateListener = () => {
 
 const fetchViolationDetails = async () => {
   loading.value = true;
-  error.value = null;
+  errorMessage.value = null; // Renamed to avoid conflict with the built-in error object
   const studentId = localStorage.getItem('authToken');
   console.log('SettleViolation - Auth Token:', studentId);
 
@@ -255,19 +256,19 @@ const fetchViolationDetails = async () => {
 
       if (dbError) {
         console.error('Error fetching violation details:', dbError);
-        error.value = 'Failed to load violation details.';
+        errorMessage.value = 'Failed to load violation details.';
       } else {
         violationDetails.value = data;
       }
     } catch (err) {
       console.error('An unexpected error occurred:', err);
-      error.value = 'An unexpected error occurred.';
+      errorMessage.value = 'An unexpected error occurred.';
     } finally {
       loading.value = false;
     }
   } else {
     loading.value = false;
-    error.value = 'Invalid parameters.';
+    errorMessage.value = 'Invalid parameters.';
   }
 };
 
