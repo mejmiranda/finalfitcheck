@@ -21,19 +21,25 @@
       </p>
       <p v-if="!isFullscreen">Thank you for your cooperation!</p>
       
-      <!-- Loading indicator for video -->
-      <div v-if="videoLoading && !isFullscreen" class="video-loading">
+      <!-- Loading indicator for video - Only show if video is actually loading -->
+      <div v-if="videoLoading && !videoError && !isFullscreen" class="video-loading">
         <div class="loading-spinner"></div>
         <p>Loading video... Please wait.</p>
+        <button @click="retryLoading" class="retry-button">Retry Loading</button>
       </div>
       
-      <div class="video-container">
+      <!-- Error message if video fails to load -->
+      <div v-if="videoError && !isFullscreen" class="video-error">
+        <p>{{ videoError }}</p>
+        <button @click="retryLoading" class="retry-button">Retry Loading</button>
+      </div>
+      
+      <div class="video-container" :class="{ 'hidden': videoLoading && !isFullscreen }">
         <video
           ref="violationVideo"
           width="100%"
           height="100%"
           preload="auto"
-          crossorigin="anonymous"
           @play="handlePlay"
           @seeked="handleSeeked"
           @pause="handlePause"
@@ -44,6 +50,10 @@
           @waiting="handleWaiting"
           @playing="handlePlaying"
           @error="handleVideoError"
+          @progress="handleProgress"
+          @stalled="handleStalled"
+          @suspend="handleSuspend"
+          @timeupdate="handleTimeUpdate"
         >
           <source :src="videoUrl" type="video/mp4" />
           Your browser does not support the video tag.
@@ -65,7 +75,7 @@ import supabase from '@/components/Supabase';
 const router = useRouter();
 const route = useRoute();
 
-// Updated video URL
+// Direct URL to video - no environment variables
 const videoUrl = ref('https://e8fomgss4r3a2uv5.public.blob.vercel-storage.com/video_violations-tcUW7LLerpiqKEcOIPIZTVesHhS2KP.mp4');
 
 const violationId = ref(null);
@@ -80,28 +90,45 @@ const errorMessage = ref(null);
 const isFullscreen = ref(false);
 const blockKeys = ref(false);
 const videoLoading = ref(true);
+const videoError = ref(null);
+const loadingTimeout = ref(null);
 
 // Ref to hold the fullscreen change listener so we can remove it
 const fullscreenChangeListener = ref(null);
 const visibilityChangeListener = ref(null);
 const keydownListener = ref(null);
 
-// Video loading event handlers
+// Set a timeout to detect if video is taking too long to load
+const setLoadingTimeout = () => {
+  clearTimeout(loadingTimeout.value);
+  loadingTimeout.value = setTimeout(() => {
+    if (videoLoading.value) {
+      videoError.value = "Video is taking too long to load. Please check your internet connection or try again.";
+    }
+  }, 30000); // 30 seconds timeout
+};
+
+// Video loading event handlers with console logs for debugging
 const handleLoadStart = () => {
   videoLoading.value = true;
+  videoError.value = null;
   console.log('Video loading started');
+  setLoadingTimeout();
 };
 
 const handleLoadedData = () => {
   console.log('Video data loaded');
+  // Don't set videoLoading to false here, wait for canplay
 };
 
 const handleCanPlay = () => {
   videoLoading.value = false;
+  clearTimeout(loadingTimeout.value);
   console.log('Video can start playing');
 };
 
 const handleWaiting = () => {
+  videoLoading.value = true;
   console.log('Video is buffering');
 };
 
@@ -110,9 +137,41 @@ const handlePlaying = () => {
   console.log('Video is playing');
 };
 
+const handleProgress = (event) => {
+  if (violationVideo.value && violationVideo.value.buffered.length > 0) {
+    const bufferedEnd = violationVideo.value.buffered.end(violationVideo.value.buffered.length - 1);
+    const duration = violationVideo.value.duration;
+    console.log(`Video buffered: ${Math.round((bufferedEnd / duration) * 100)}%`);
+  }
+};
+
+const handleStalled = () => {
+  console.log('Video has stalled');
+};
+
+const handleSuspend = () => {
+  console.log('Video loading has been suspended');
+};
+
 const handleVideoError = (event) => {
+  videoLoading.value = false;
+  videoError.value = "Failed to load video. Please check your internet connection and try again.";
   console.error('Video error:', event);
-  errorMessage.value = 'Failed to load video. Please check your internet connection.';
+  clearTimeout(loadingTimeout.value);
+};
+
+// Function to retry loading the video
+const retryLoading = () => {
+  if (violationVideo.value) {
+    videoLoading.value = true;
+    videoError.value = null;
+    
+    // Force reload the video
+    violationVideo.value.load();
+    
+    // Set timeout again
+    setLoadingTimeout();
+  }
 };
 
 // Preload video when component mounts
@@ -123,6 +182,9 @@ const preloadVideo = () => {
     
     // Start loading the video
     violationVideo.value.load();
+    
+    // Set timeout for loading
+    setLoadingTimeout();
   }
 };
 
@@ -289,7 +351,6 @@ const handleTimeUpdate = () => {
       removeFullscreenBlockers();
       blockKeys.value = false;
       window.removeEventListener('keydown', globalKeyBlocker);
-      violationVideo.value.removeEventListener('timeupdate', handleTimeUpdate);
     }
   }
 };
@@ -300,13 +361,6 @@ const handleVideoEnded = () => {
   removeFullscreenBlockers();
   blockKeys.value = false;
   window.removeEventListener('keydown', globalKeyBlocker);
-  violationVideo.value.removeEventListener('timeupdate', handleTimeUpdate);
-};
-
-const attachTimeUpdateListener = () => {
-  if (violationVideo.value) {
-    violationVideo.value.addEventListener('timeupdate', handleTimeUpdate);
-  }
 };
 
 const setupVideoListeners = () => {
@@ -316,6 +370,8 @@ const setupVideoListeners = () => {
     
     violationVideo.value.addEventListener('loadedmetadata', () => {
       videoDuration.value = violationVideo.value.duration;
+      console.log('Video duration:', videoDuration.value);
+      
       // Only request fullscreen after video is ready to play
       if (violationVideo.value.readyState >= 3) { // HAVE_FUTURE_DATA
         requestFullscreen();
@@ -324,6 +380,7 @@ const setupVideoListeners = () => {
 
     // Start playing the video automatically when it's ready
     violationVideo.value.addEventListener('canplaythrough', () => {
+      console.log('Video can play through');
       if (!isFullscreen.value) {
         requestFullscreen();
       }
@@ -348,9 +405,6 @@ const setupVideoListeners = () => {
     violationVideo.value.addEventListener('play', () => {
       blockKeys.value = true;
     });
-
-    // Attach time update listener
-    attachTimeUpdateListener();
   }
 };
 
@@ -378,6 +432,9 @@ onBeforeUnmount(() => {
     document.removeEventListener('visibilitychange', visibilityChangeListener.value);
   }
   window.removeEventListener('keydown', globalKeyBlocker);
+  
+  // Clear any timeouts
+  clearTimeout(loadingTimeout.value);
 });
 </script>
 
@@ -402,7 +459,7 @@ onBeforeUnmount(() => {
   left: 0;
 }
 
-.video-loading {
+.video-loading, .video-error {
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -411,6 +468,13 @@ onBeforeUnmount(() => {
   background-color: #f8f9fa;
   border-radius: 8px;
   margin: 20px 0;
+  text-align: center;
+}
+
+.video-error {
+  background-color: #fff3f3;
+  border: 1px solid #ffcdd2;
+  color: #d32f2f;
 }
 
 .loading-spinner {
@@ -421,6 +485,21 @@ onBeforeUnmount(() => {
   border-radius: 50%;
   animation: spin 1s linear infinite;
   margin-bottom: 15px;
+}
+
+.retry-button {
+  margin-top: 15px;
+  padding: 8px 16px;
+  background-color: #3498db;
+  color: white;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 14px;
+}
+
+.retry-button:hover {
+  background-color: #2980b9;
 }
 
 @keyframes spin {
@@ -465,6 +544,10 @@ onBeforeUnmount(() => {
   width: 100%;
   height: auto;
   aspect-ratio: 16 / 9;
+}
+
+.video-container.hidden {
+  display: none;
 }
 
 .settle-vio.fullscreen-video .video-container {
