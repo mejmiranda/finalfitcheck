@@ -80,7 +80,7 @@ const router = useRouter();
 const route = useRoute();
 
 // Use the video URL without any special headers
-const videoUrl = ref('https://e8fomgss4r3a2uv5.public.blob.vercel-storage.com/video_violations-tcUW7LLerpiqKEcOIPIZTVesHhS2KP.mp4');
+const videoUrl = ref('https://e8fomgss4r3a2uv5.public.blob.vercel-storage.com/video_violations-YmUmmhgbz1iKR54kFpUpZxvAB8EtuU.mp4');
 
 const violationId = ref(null);
 const violationDetails = ref(null);

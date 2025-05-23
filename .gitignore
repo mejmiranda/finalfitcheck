@@ -23,3 +23,24 @@ pnpm-debug.log*
 *.sw?
 
 .vercel
+
+# Large media files
+*.mp4
+*.mov
+*.avi
+*.mkv
+
+# Environment files
+.env
+.env.local
+.env.*.local
+
+# Dependencies
+node_modules/
+
+# Build outputs
+dist/
+build/
+
+# Vercel
+.vercel
