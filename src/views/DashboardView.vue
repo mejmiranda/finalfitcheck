@@ -8,23 +8,22 @@
       <div style="display: flex; align-items: center;">
         <img src="@/assets/footcount-icon.png" alt="Total Foot Count Icon" style="max-height: 50px; margin-right: 10px;">
         <div>
-          <p style="margin: 0; font-weight: bold;">Total Foot Count</p>
+          <p style="margin: 0; font-weight: bold;">Daily Foot Count</p>
           <p style="margin: 0;">{{ totalFootCount }}</p>
         </div>
       </div>
       <div style="display: flex; align-items: center;">
         <img src="@/assets/newvio-icon.png" alt="New Violation Icon" style="max-height: 50px; margin-right: 10px;">
         <div>
-          <p style="margin: 0; font-weight: bold;">New Violations</p>
+          <p style="margin: 0; font-weight: bold;">New Violations Today</p>
           <p style="margin: 0;">{{ newViolationCount }}</p>
         </div>
       </div>
       <div style="display: flex; align-items: center;">
         <img src="@/assets/unsettled-icon.png" alt="Unsettled Violation Icon" style="max-height: 50px; margin-right: 10px;">
         <div>
-          <p style="margin: 0; font-weight: bold;">Unsettled Violations</p>
-          <p style="margin: 0;">{{ unsettledViolationCount }}</p>
-        </div>
+          <p style="margin: 0; font-weight: bold;">Unsettled Violations Today</p>
+          <p style="margin: 0;">{{ unsettledViolationCountToday }}</p> </div>
       </div>
     </div>
 
@@ -82,9 +81,11 @@
 </template>
 
 <script>
-import supabase from '@/components/Supabase'; // Ensure this path is correct
+import supabase from '@/components/Supabase';
+import moment from 'moment-timezone'; // Make sure moment-timezone is installed: npm install moment-timezone
 
 export default {
+  // All reactive data properties go here
   data() {
     return {
       activityLogsWithDetails: [],
@@ -100,7 +101,18 @@ export default {
       newViolationCount: 0,
     };
   },
+
+  // Computed properties go here
   computed: {
+    unsettledViolationCountToday() {
+      const startOfTodayPHT = moment().tz('Asia/Manila').startOf('day');
+      const endOfTodayPHT = moment().tz('Asia/Manila').endOf('day');
+
+      return this.activityLogsWithDetails.filter(log => {
+        const recordedDatePHT = moment.tz(log.date_recorded, 'Asia/Manila');
+        return !log.statusreal && recordedDatePHT.isBetween(startOfTodayPHT, endOfTodayPHT, null, '[]');
+      }).length;
+    },
     filteredActivityLogs() {
       let filtered = this.activityLogsWithDetails.filter(log =>
         log.students?.student_name?.toLowerCase().includes(this.searchQuery.toLowerCase())
@@ -138,27 +150,31 @@ export default {
 
       return sorted;
     },
-    unsettledViolationCount() {
-      return this.activityLogsWithDetails.filter(log => !log.statusreal).length;
-    },
   },
+
+  // Lifecycle hook for when the component is mounted to the DOM
   async mounted() {
+    // These calls are correct now that the methods are in the 'methods' object
     await this.fetchActivityLogsWithDetails();
     await this.fetchViolationCategories();
-    await this.fetchCurrentDayFootCount(); // Fetch foot count on mount
+    await this.fetchCurrentDayFootCount();
     this.setupRealtimeSubscription();
-    this.calculateDashboardCounts();
+    this.calculateDashboardCounts(); // This will calculate newViolationCount
   },
+
+  // Lifecycle hook for when the component is about to be unmounted
   beforeUnmount() {
     if (this.subscription) {
       supabase.removeChannel(this.subscription);
     }
   },
+
+  // All your functions/methods go here
   methods: {
     formatDate(isoString) {
       if (!isoString) return '';
-      const date = new Date(isoString);
-      return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')} ${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}:${String(date.getSeconds()).padStart(2, '0')}`;
+      // Parse as UTC, then convert to PHT for display
+      return moment.utc(isoString).tz('Asia/Manila').format('YYYY-MM-DD h:mm:ss A');
     },
     async fetchActivityLogsWithDetails() {
       this.loading = true;
@@ -187,7 +203,7 @@ export default {
           this.error = error.message;
         } else {
           this.activityLogsWithDetails = data;
-          this.calculateDashboardCounts();
+          this.calculateDashboardCounts(); // Recalculate newViolationCount after fetch
         }
       } catch (err) {
         console.error('Unexpected error fetching activity logs:', err);
@@ -213,15 +229,21 @@ export default {
     },
     async fetchCurrentDayFootCount() {
       try {
-        const today = new Date();
-        const startOfTodayISO = today.toISOString().slice(0, 10) + 'T00:00:00+00:00'; // Midnight UTC
-        const endOfTodayISO = today.toISOString().slice(0, 10) + 'T23:59:59+00:00';   // End of day UTC
+        const nowManila = moment().tz('Asia/Manila');
+
+        const startOfTodayManila = nowManila.clone().startOf('day').add(1, 'minute');
+        const endOfTodayManila = nowManila.clone().endOf('day').subtract(1, 'second');
+
+        const startISO = startOfTodayManila.toISOString();
+        const endISO = endOfTodayManila.toISOString();
+
+        console.log('Fetching foot count for PHT:', startOfTodayManila.format(), 'to', endOfTodayManila.format());
 
         const { data, error } = await supabase
           .from('foot_counts')
           .select('count')
-          .gte('timestamp', startOfTodayISO)
-          .lte('timestamp', endOfTodayISO);
+          .gte('timestamp', startISO)
+          .lte('timestamp', endISO);
 
         if (error) {
           console.error('Error fetching current day foot count:', error);
@@ -233,39 +255,37 @@ export default {
       }
     },
     setupRealtimeSubscription() {
+      if (this.subscription) {
+        supabase.removeChannel(this.subscription);
+      }
+
       this.subscription = supabase
-        .channel('realtime:activity_logs')
+        .channel('dashboard_realtime_channel')
         .on('postgres_changes', { event: '*', schema: 'public', table: 'activity_logs' }, async payload => {
           console.log('Change detected in activity_logs:', payload);
           await this.fetchActivityLogsWithDetails();
         })
         .on('postgres_changes', { event: '*', schema: 'public', table: 'foot_counts' }, async payload => {
           console.log('Change detected in foot_counts:', payload);
-          await this.fetchCurrentDayFootCount(); // Refresh foot count on changes
+          await this.fetchCurrentDayFootCount();
         })
         .subscribe();
     },
     calculateDashboardCounts() {
-      // Calculate the count of unsettled violations
-      // This is now handled by the unsettledViolationCount computed property
-
-      // Calculate the count of new violations for the current day
-      const today = new Date();
-      const startOfToday = new Date(today.getFullYear(), today.getMonth(), today.getDate());
-      const endOfToday = new Date(today.getFullYear(), today.getMonth(), today.getDate() + 1);
+      const startOfTodayPHT = moment().tz('Asia/Manila').startOf('day');
+      const endOfTodayPHT = moment().tz('Asia/Manila').endOf('day');
 
       this.newViolationCount = this.activityLogsWithDetails.filter(log => {
-        const recordedDate = new Date(log.date_recorded);
-        return recordedDate >= startOfToday && recordedDate < endOfToday;
+        const recordedDatePHT = moment.tz(log.date_recorded, 'Asia/Manila');
+        return recordedDatePHT.isBetween(startOfTodayPHT, endOfTodayPHT, null, '[]');
       }).length;
-
-      // this.totalFootCount is now fetched separately in fetchCurrentDayFootCount
     },
   },
 };
 </script>
 
 <style scoped>
+/* Your existing styles remain unchanged */
 .dashboard {
   padding: 20px;
 }

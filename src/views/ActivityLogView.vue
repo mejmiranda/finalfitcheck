@@ -8,22 +8,22 @@
       <div style="display: flex; align-items: center;">
         <img src="@/assets/footcount-icon.png" alt="Total Foot Count Icon" style="max-height: 50px; margin-right: 10px;">
         <div>
-          <p style="margin: 0; font-weight: bold;">Total Foot Count</p>
+          <p style="margin: 0; font-weight: bold;">Daily Foot Count</p>
           <p style="margin: 0;">{{ totalFootCount }}</p>
         </div>
       </div>
       <div style="display: flex; align-items: center;">
         <img src="@/assets/newvio-icon.png" alt="New Violation Icon" style="max-height: 50px; margin-right: 10px;">
         <div>
-          <p style="margin: 0; font-weight: bold;">New Violations</p>
+          <p style="margin: 0; font-weight: bold;">New Violations Today</p>
           <p style="margin: 0;">{{ newViolationCount }}</p>
         </div>
       </div>
       <div style="display: flex; align-items: center;">
         <img src="@/assets/unsettled-icon.png" alt="Unsettled Violation Icon" style="max-height: 50px; margin-right: 10px;">
         <div>
-          <p style="margin: 0; font-weight: bold;">Unsettled Violations</p>
-          <p style="margin: 0;">{{ unsettledViolationCount }}</p>
+          <p style="margin: 0; font-weight: bold;">Unsettled Violations Today</p>
+          <p style="margin: 0;">{{ unsettledViolationCountToday }}</p>
         </div>
       </div>
     </div>
@@ -136,7 +136,8 @@
 </template>
 
 <script>
-import supabase from '@/components/Supabase'; // Ensure this path is correct
+import supabase from '@/components/Supabase';
+import moment from 'moment-timezone'; // Ensure moment-timezone is installed
 
 export default {
   data() {
@@ -152,10 +153,20 @@ export default {
       modalImageUrl: '',
       totalFootCount: 0,
       newViolationCount: 0,
-      unsettledViolationCount: 0,
+      // unsettledViolationCount: 0, // This computed property will replace this
     };
   },
   computed: {
+    unsettledViolationCountToday() {
+      const startOfTodayPHT = moment().tz('Asia/Manila').startOf('day');
+      const endOfTodayPHT = moment().tz('Asia/Manila').endOf('day');
+
+      return this.activityLogs.filter(log => {
+        const recordedDatePHT = moment.tz(log.date_recorded, 'Asia/Manila');
+        // Only count unsettled violations that were recorded today
+        return !log.statusreal && recordedDatePHT.isBetween(startOfTodayPHT, endOfTodayPHT, null, '[]');
+      }).length;
+    },
     filteredActivityLogs() {
       let filtered = this.activityLogs.filter(log => {
         const studentName = log.students?.student_name?.toLowerCase() || '';
@@ -191,25 +202,30 @@ export default {
   async mounted() {
     await this.fetchActivityLog();
     await this.fetchCurrentDayFootCount();
-    this.calculateDashboardCounts();
+    // No need to call calculateDashboardCounts directly here if it's reactive to activityLogs changes
   },
   methods: {
     formatDate(isoString) {
       if (!isoString) return '';
-      const date = new Date(isoString);
-      return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')} ${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}:${String(date.getSeconds()).padStart(2, '0')}`;
+      // Parse as UTC, then convert to PHT for display
+      return moment.utc(isoString).tz('Asia/Manila').format('YYYY-MM-DD h:mm:ss A');
     },
     async fetchCurrentDayFootCount() {
       try {
-        const today = new Date();
-        const startOfTodayISO = today.toISOString().slice(0, 12) + 'T00:00:00+00:00';
-        const endOfTodayISO = today.toISOString().slice(0, 12) + 'T23:59:59+59:59';
+        const nowManila = moment().tz('Asia/Manila');
+        const startOfTodayManila = nowManila.clone().startOf('day').add(1, 'minute');
+        const endOfTodayManila = nowManila.clone().endOf('day').subtract(1, 'second');
+
+        const startISO = startOfTodayManila.toISOString();
+        const endISO = endOfTodayManila.toISOString();
+
+        console.log('Fetching foot count for PHT:', startOfTodayManila.format(), 'to', endOfTodayManila.format());
 
         const { data, error } = await supabase
           .from('foot_counts')
           .select('count')
-          .gte('timestamp', startOfTodayISO)
-          .lte('timestamp', endOfTodayISO);
+          .gte('timestamp', startISO)
+          .lte('timestamp', endISO);
 
         if (error) {
           console.error('Error fetching current day foot count:', error);
@@ -249,7 +265,7 @@ export default {
           this.error = error.message;
         } else {
           this.activityLogs = data;
-          this.calculateDashboardCounts();
+          this.calculateDashboardCounts(); // Recalculate counts after activity logs are fetched
         }
       } catch (err) {
         console.error('Unexpected error fetching activity log:', err);
@@ -260,10 +276,9 @@ export default {
     },
     showDetails(log) {
       this.selectedViolation = log;
-      // When showing details, set modalImageUrl from selectedViolation
       this.modalImageUrl = log.image_url || require('@/assets/studentpic.png');
     },
-    showModal(violation) { // Changed parameter from 'student' to 'violation' for clarity
+    showModal(violation) {
       if (violation && violation.image_url) {
         this.modalImageUrl = violation.image_url;
         this.isModalVisible = true;
@@ -278,22 +293,21 @@ export default {
       this.modalImageUrl = '';
     },
     calculateDashboardCounts() {
-      this.unsettledViolationCount = this.activityLogs.filter(log => !log.statusreal).length;
-
-      const today = new Date();
-      const startOfToday = new Date(today.getFullYear(), today.getMonth(), today.getDate());
-      const endOfToday = new Date(today.getFullYear(), today.getMonth(), today.getDate() + 1);
+      const startOfTodayPHT = moment().tz('Asia/Manila').startOf('day');
+      const endOfTodayPHT = moment().tz('Asia/Manila').endOf('day');
 
       this.newViolationCount = this.activityLogs.filter(log => {
-        const recordedDate = new Date(log.date_recorded);
-        return recordedDate >= startOfToday && recordedDate < endOfToday;
+        const recordedDatePHT = moment.tz(log.date_recorded, 'Asia/Manila');
+        return recordedDatePHT.isBetween(startOfTodayPHT, endOfTodayPHT, null, '[]');
       }).length;
+      // unsettledViolationCountToday is already a computed property, so it will update automatically
     },
   },
 };
 </script>
 
 <style scoped>
+/* Your existing styles remain unchanged */
 .activity-log {
   padding: 20px;
 }
@@ -395,26 +409,26 @@ th {
 }
 
 .violation-details-full .details-container {
-  display: flex; /* Enable Flexbox */
-  align-items: flex-start; /* Align text and image to the top */
-  gap: 20px; /* Space between image and text */
+  display: flex;
+  align-items: flex-start;
+  gap: 20px;
 }
 
 .violation-details-full .details-image {
-  flex-shrink: 0; /* Don't allow image to shrink */
-  width: auto; /* Allow image width to adjust based on content */
-  margin-right: 1in; /* Add 1 inch margin to the right of the image */
+  flex-shrink: 0;
+  width: auto;
+  margin-right: 1in;
 }
 
 .violation-details-full .details-image img {
-  max-width: 200px; /* Ensure image doesn't get too large */
+  max-width: 200px;
   height: auto;
   border-radius: 4px;
   cursor: zoom-in;
 }
 
 .violation-details-full .details-text {
-  flex: 1; /* Allow text to take up remaining width */
+  flex: 1;
 }
 
 .violation-details-full .return-button {

@@ -20,6 +20,18 @@
         liability in your portal.
       </p>
       <p v-if="!isFullscreen">Thank you for your cooperation!</p>
+      
+      <!-- Debug info -->
+      <div v-if="!isFullscreen && debugMode" class="debug-info">
+        <h3>Debug Information:</h3>
+        <p><strong>Video URL:</strong> {{ videoUrl }}</p>
+        <p><strong>Video Loading:</strong> {{ videoLoading }}</p>
+        <p><strong>Video Error:</strong> {{ videoError }}</p>
+        <button @click="testVideoUrl" class="test-button">Test Video URL</button>
+        <button @click="debugMode = false" class="test-button">Hide Debug</button>
+      </div>
+      <button v-if="!isFullscreen && !debugMode" @click="debugMode = true" class="test-button">Show Debug Info</button>
+      
       <div class="video-container">
         <video
           ref="violationVideo"
@@ -29,8 +41,13 @@
           @seeked="handleSeeked"
           @pause="handlePause"
           @ended="handleVideoEnded"
+          @error="handleVideoError"
+          @loadstart="handleLoadStart"
+          @canplay="handleCanPlay"
+          @loadedmetadata="handleLoadedMetadata"
           preload="metadata"
           controlsList="nodownload"
+          crossorigin="anonymous"
         >
           <source :src="videoUrl" type="video/mp4" />
           Your browser does not support the video tag.
@@ -38,6 +55,10 @@
         <div v-if="videoLoading" class="video-loading">
           <div class="spinner"></div>
           <p>Loading video...</p>
+        </div>
+        <div v-if="videoError" class="video-error">
+          <p>{{ videoError }}</p>
+          <button @click="retryVideo" class="retry-button">Retry</button>
         </div>
         <button v-if="isVideoDone && !isFullscreen" @click="markViolationAsDone" class="done-button">Done</button>
       </div>
@@ -68,13 +89,109 @@ const errorMessage = ref(null);
 const isFullscreen = ref(false);
 const blockKeys = ref(false);
 const videoLoading = ref(true);
-// Using the provided Vercel Blob URL
-const videoUrl = ref('https://e8fomgss4r3a2uv5.public.blob.vercel-storage.com/video_violations.mp4');
+const videoError = ref(null);
+const debugMode = ref(false);
+
+// Try different video URLs as fallbacks
+const videoUrls = ref([
+  'https://e8fomgss4r3a2uv5.public.blob.vercel-storage.com/video_violations.mp4',
+  // Add fallback URLs if you have them
+]);
+const currentVideoIndex = ref(0);
+const videoUrl = ref(videoUrls.value[0]);
 
 // Ref to hold the fullscreen change listener so we can remove it
 const fullscreenChangeListener = ref(null);
 const visibilityChangeListener = ref(null);
 const keydownListener = ref(null);
+
+const testVideoUrl = async () => {
+  try {
+    console.log('Testing video URL:', videoUrl.value);
+    const response = await fetch(videoUrl.value, { method: 'HEAD' });
+    console.log('Video URL test response:', response.status, response.statusText);
+    
+    if (response.ok) {
+      console.log('Video URL is accessible');
+      const contentType = response.headers.get('content-type');
+      const contentLength = response.headers.get('content-length');
+      console.log('Content-Type:', contentType);
+      console.log('Content-Length:', contentLength);
+    } else {
+      console.error('Video URL test failed:', response.status, response.statusText);
+      videoError.value = `Video URL test failed: ${response.status} ${response.statusText}`;
+    }
+  } catch (error) {
+    console.error('Error testing video URL:', error);
+    videoError.value = `Error testing video URL: ${error.message}`;
+  }
+};
+
+const retryVideo = () => {
+  videoError.value = null;
+  videoLoading.value = true;
+  
+  // Try next URL if available
+  if (currentVideoIndex.value < videoUrls.value.length - 1) {
+    currentVideoIndex.value++;
+    videoUrl.value = videoUrls.value[currentVideoIndex.value];
+    console.log('Trying fallback URL:', videoUrl.value);
+  }
+  
+  // Force video reload
+  if (violationVideo.value) {
+    violationVideo.value.load();
+  }
+};
+
+const handleLoadStart = () => {
+  console.log('Video load started');
+  videoLoading.value = true;
+  videoError.value = null;
+};
+
+const handleCanPlay = () => {
+  console.log('Video can play');
+  videoLoading.value = false;
+};
+
+const handleLoadedMetadata = () => {
+  console.log('Video metadata loaded');
+  videoDuration.value = violationVideo.value.duration;
+  videoLoading.value = false;
+  // Request fullscreen after metadata is loaded
+  requestFullscreen();
+};
+
+const handleVideoError = (e) => {
+  console.error('Video error event:', e);
+  console.error('Video error details:', violationVideo.value?.error);
+  
+  const error = violationVideo.value?.error;
+  let errorMessage = 'Failed to load video';
+  
+  if (error) {
+    switch (error.code) {
+      case 1:
+        errorMessage = 'Video loading aborted';
+        break;
+      case 2:
+        errorMessage = 'Network error while loading video';
+        break;
+      case 3:
+        errorMessage = 'Video decoding error';
+        break;
+      case 4:
+        errorMessage = 'Video format not supported';
+        break;
+      default:
+        errorMessage = `Video error (code: ${error.code})`;
+    }
+  }
+  
+  videoError.value = errorMessage;
+  videoLoading.value = false;
+};
 
 const fetchViolationDetails = async () => {
   loading.value = true;
@@ -115,7 +232,7 @@ const fetchViolationDetails = async () => {
 
 const requestFullscreen = () => {
   const video = violationVideo.value;
-  if (video) {
+  if (video && !videoError.value) {
     if (video.requestFullscreen) {
       video.requestFullscreen();
     } else if (video.webkitRequestFullscreen) { /* Safari */
@@ -143,7 +260,7 @@ const exitFullscreen = () => {
 const handleFullscreenChange = () => {
   isFullscreen.value = !!(document.fullscreenElement || document.webkitFullscreenElement || document.mozFullScreenElement || document.msFullscreenElement);
   // If exiting fullscreen manually before the video is done, re-enter fullscreen
-  if (!isFullscreen.value && !isVideoDone.value) {
+  if (!isFullscreen.value && !isVideoDone.value && !videoError.value) {
     // Use a slight delay to avoid immediate re-entry if the user quickly tries to switch tabs
     setTimeout(requestFullscreen, 100);
   }
@@ -272,24 +389,11 @@ onMounted(async () => {
   console.log('SettleViolation - Route params violationId:', route.params.violationId);
   await fetchViolationDetails();
 
+  // Test the video URL first
+  await testVideoUrl();
+
   // Setup video listeners when violation details are loaded and the video element exists
   if (violationDetails.value && violationVideo.value) {
-    // Add loading event listeners
-    violationVideo.value.addEventListener('loadstart', () => {
-      videoLoading.value = true;
-    });
-    
-    violationVideo.value.addEventListener('canplay', () => {
-      videoLoading.value = false;
-    });
-
-    violationVideo.value.addEventListener('loadedmetadata', () => {
-      videoDuration.value = violationVideo.value.duration;
-      videoLoading.value = false;
-      // Request fullscreen after metadata is loaded
-      requestFullscreen();
-    });
-
     // Attach time update listener
     attachTimeUpdateListener();
 
@@ -453,6 +557,23 @@ onBeforeUnmount(() => {
   z-index: 10;
 }
 
+.video-error {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  background-color: rgba(255, 0, 0, 0.1);
+  color: #d32f2f;
+  z-index: 10;
+  text-align: center;
+  padding: 20px;
+}
+
 .spinner {
   border: 4px solid rgba(255, 255, 255, 0.3);
   border-radius: 50%;
@@ -466,5 +587,40 @@ onBeforeUnmount(() => {
 @keyframes spin {
   0% { transform: rotate(0deg); }
   100% { transform: rotate(360deg); }
+}
+
+.debug-info {
+  background-color: #f5f5f5;
+  padding: 15px;
+  border-radius: 5px;
+  margin: 10px 0;
+  border-left: 4px solid #2196F3;
+}
+
+.debug-info h3 {
+  margin-top: 0;
+  color: #2196F3;
+}
+
+.test-button, .retry-button {
+  background-color: #2196F3;
+  color: white;
+  border: none;
+  padding: 8px 16px;
+  border-radius: 4px;
+  cursor: pointer;
+  margin: 5px;
+}
+
+.test-button:hover, .retry-button:hover {
+  background-color: #1976D2;
+}
+
+.retry-button {
+  background-color: #ff9800;
+}
+
+.retry-button:hover {
+  background-color: #f57c00;
 }
 </style>

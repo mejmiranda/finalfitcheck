@@ -99,18 +99,19 @@ export default {
       loading.value = true;
       error.value = null;
       try {
-        const today = new Date();
+        const today = new Date(); // This `today` is a local Date object (PHT)
+
         let startDate, endDate;
 
         if (filterType === 'daily') {
           startDate = new Date(today);
-          startDate.setHours(7, 0, 0, 0); // Start at 7 AM
+          startDate.setHours(0, 0, 0, 0); // Start at 12 AM (00:00) PHT
           endDate = new Date(today);
-          endDate.setHours(22, 0, 0, 0); // End at 10 PM (22:00)
+          endDate.setHours(23, 59, 59, 999); // End at 11:59:59 PM (23:59:59) PHT
         } else if (filterType === 'weekly') {
           startDate = startOfWeek(today, { weekStartsOn: 1 }); // Monday
-          endDate = endOfWeek(today, { weekStartsOn: 1 }); // Saturday (assuming your week is Mon-Sat)
-          endDate.setDate(endDate.getDate() - 1); // Adjust to Saturday
+          endDate = endOfWeek(today, { weekStartsOn: 1 }); // Sunday
+          endDate.setDate(endDate.getDate() - 1); // Adjust to Saturday (as per your previous logic)
           endDate.setHours(23, 59, 59, 999);
           startDate.setHours(0, 0, 0, 0);
         } else if (filterType === 'monthly') {
@@ -132,20 +133,51 @@ export default {
 
         console.log('Fetching data for:', filterType, 'from:', startDate, 'to:', endDate); // Debugging
 
-        // Fetch violation logs
-        const { data: filteredLogs, error: filteredLogsError } = await supabase
+        // Fetch violation logs from Supabase for the entire period
+        const { data: allFilteredLogs, error: filteredLogsError } = await supabase
           .from('activity_logs')
           .select('date_recorded, violation_categories(name), statusreal')
           .gte('date_recorded', startDate.toISOString())
           .lte('date_recorded', endDate.toISOString());
 
         if (filteredLogsError) throw filteredLogsError;
-        totalViolationsCount.value = filteredLogs.length;
-        settledViolationsCount.value = filteredLogs.filter(log => log.statusreal === true).length;
-        unsettledViolationsCount.value = filteredLogs.filter(log => log.statusreal === false).length;
+
+        // Apply "live" filtering to the logs based on current time BEFORE calculating counts
+        let currentLiveLogs = [];
+        const now = new Date(); // Current local time for "live" cut-off
+
+        if (filterType === 'daily') {
+          const currentHour = now.getHours();
+          currentLiveLogs = allFilteredLogs.filter(log => {
+            const logDate = new Date(log.date_recorded);
+            return logDate.getHours() <= currentHour;
+          });
+        } else if (filterType === 'weekly' || filterType === 'monthly') {
+          const todayAtMidnight = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+          currentLiveLogs = allFilteredLogs.filter(log => {
+            const logDate = new Date(log.date_recorded);
+            const logDayAtMidnight = new Date(logDate.getFullYear(), logDate.getMonth(), logDate.getDate()).getTime();
+            return logDayAtMidnight <= todayAtMidnight;
+          });
+        } else if (filterType === 'semestral') {
+          const currentMonthStart = new Date(now.getFullYear(), now.getMonth(), 1).getTime();
+          currentLiveLogs = allFilteredLogs.filter(log => {
+            const logDate = new Date(log.date_recorded);
+            const logMonthStart = new Date(logDate.getFullYear(), logDate.getMonth(), 1).getTime();
+            return logMonthStart <= currentMonthStart;
+          });
+        } else {
+          // Fallback for any other filter types if needed (though not currently defined)
+          currentLiveLogs = allFilteredLogs;
+        }
+
+        // Now calculate counts from `currentLiveLogs` (which are time-filtered)
+        totalViolationsCount.value = currentLiveLogs.length;
+        settledViolationsCount.value = currentLiveLogs.filter(log => log.statusreal === true).length;
+        unsettledViolationsCount.value = currentLiveLogs.filter(log => log.statusreal === false).length;
 
         const policyCounts = {};
-        filteredLogs?.forEach(log => {
+        currentLiveLogs?.forEach(log => { // Iterate through currentLiveLogs
           const policyName = log.violation_categories?.name;
           if (policyName) {
             policyCounts[policyName] = (policyCounts[policyName] || 0) + 1;
@@ -158,7 +190,7 @@ export default {
         }));
         violatedPolicies.value.sort((a, b) => b.count - a.count);
 
-        // Fetch foot traffic data
+        // Fetch foot traffic data (this will also be filtered by time)
         const { data: footTrafficData, error: footTrafficError } = await supabase
           .from('foot_counts')
           .select('timestamp, count')
@@ -168,7 +200,9 @@ export default {
 
         if (footTrafficError) throw footTrafficError;
 
-        updateCharts(filteredLogs, footTrafficData, filterType, startDate, endDate);
+        // The charts will then take these time-filtered logs and apply their own nulling logic
+        // for future time points, ensuring consistency.
+        updateCharts(currentLiveLogs, footTrafficData, filterType, startDate, endDate);
 
         console.log('Fetched and processed report data for:', filterType, {
           total: totalViolationsCount.value,
@@ -185,18 +219,20 @@ export default {
       }
     };
 
+    // The rest of your script (prepareChartData, prepareFootTrafficChartData, updateCharts, etc.)
+    // remains the same, as they are already set up to handle live data and the current time `now`.
+
     const prepareChartData = (logs, filterType, startDate, endDate) => {
       const counts = {};
       let labels = [];
+      const now = new Date();
 
       if (filterType === 'daily') {
-        labels = Array.from({ length: 16 }, (_, i) => `${String(i + 7).padStart(2, '0')}:00`); // Hours from 7 to 22
+        labels = Array.from({ length: 24 }, (_, i) => `${String(i).padStart(2, '0')}:00`);
         logs.forEach(log => {
           const hour = new Date(log.date_recorded).getHours();
-          if (hour >= 7 && hour <= 22) {
-            const hourLabel = `${String(hour).padStart(2, '0')}:00`;
-            counts[hourLabel] = (counts[hourLabel] || 0) + 1;
-          }
+          const hourLabel = `${String(hour).padStart(2, '0')}:00`;
+          counts[hourLabel] = (counts[hourLabel] || 0) + 1;
         });
       } else if (filterType === 'weekly') {
         const days = eachDayOfInterval({ start: startDate, end: endDate });
@@ -221,22 +257,57 @@ export default {
         });
       }
 
-      const data = labels.map(label => counts[label] || 0);
+      let data;
+      if (filterType === 'daily') {
+        const currentHour = now.getHours();
+        data = labels.map(label => {
+          const hour = parseInt(label.split(':')[0]);
+          return (hour > currentHour) ? null : (counts[label] || 0);
+        });
+      } else if (filterType === 'weekly' || filterType === 'monthly') {
+        const intervals = eachDayOfInterval({ start: startDate, end: endDate });
+        const todayAtMidnight = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+
+        data = labels.map((label, index) => {
+          const labelDate = intervals[index];
+          const labelDateAtMidnight = new Date(labelDate.getFullYear(), labelDate.getMonth(), labelDate.getDate()).getTime();
+
+          if (labelDateAtMidnight > todayAtMidnight) {
+            return null;
+          }
+          return counts[label] || 0;
+        });
+      } else if (filterType === 'semestral') {
+        const intervals = eachMonthOfInterval({ start: startDate, end: endDate });
+        const currentMonthStart = new Date(now.getFullYear(), now.getMonth(), 1).getTime();
+
+        data = labels.map((label, index) => {
+          const labelDate = intervals[index];
+          const labelMonthStart = new Date(labelDate.getFullYear(), labelDate.getMonth(), 1).getTime();
+
+          if (labelMonthStart > currentMonthStart) {
+            return null;
+          }
+          return counts[label] || 0;
+        });
+      } else {
+          data = labels.map(label => counts[label] || 0);
+      }
+
       return { labels, data };
     };
 
     const prepareFootTrafficChartData = (footTrafficData, filterType, startDate, endDate) => {
       const counts = {};
       let labels = [];
+      const now = new Date();
 
       if (filterType === 'daily') {
-        labels = Array.from({ length: 16 }, (_, i) => `${String(i + 7).padStart(2, '0')}:00`); // Hours from 7 to 22
+        labels = Array.from({ length: 24 }, (_, i) => `${String(i).padStart(2, '0')}:00`);
         footTrafficData.forEach(item => {
           const hour = new Date(item.timestamp).getHours();
-          if (hour >= 7 && hour <= 22) {
-            const hourLabel = `${String(hour).padStart(2, '0')}:00`;
-            counts[hourLabel] = (counts[hourLabel] || 0) + parseInt(item.count);
-          }
+          const hourLabel = `${String(hour).padStart(2, '0')}:00`;
+          counts[hourLabel] = (counts[hourLabel] || 0) + parseInt(item.count);
         });
       } else if (filterType === 'weekly') {
         const days = eachDayOfInterval({ start: startDate, end: endDate });
@@ -255,13 +326,49 @@ export default {
       } else if (filterType === 'semestral') {
         const months = eachMonthOfInterval({ start: startDate, end: endDate });
         labels = months.map(date => formatDate(date, 'MMM'));
-        footTrafficData.forEach(item => {
+        footTrafficData.forEach(item => { // Corrected from `logs` to `footTrafficData`
           const month = formatDate(new Date(item.timestamp), 'MMM');
           counts[month] = (counts[month] || 0) + parseInt(item.count);
         });
       }
 
-      const data = labels.map(label => counts[label] || 0);
+      let data;
+      if (filterType === 'daily') {
+        const currentHour = now.getHours();
+        data = labels.map(label => {
+          const hour = parseInt(label.split(':')[0]);
+          return (hour > currentHour) ? null : (counts[label] || 0);
+        });
+      } else if (filterType === 'weekly' || filterType === 'monthly') {
+        const intervals = eachDayOfInterval({ start: startDate, end: endDate });
+        const todayAtMidnight = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+
+        data = labels.map((label, index) => {
+          const labelDate = intervals[index];
+          const labelDateAtMidnight = new Date(labelDate.getFullYear(), labelDate.getMonth(), labelDate.getDate()).getTime();
+
+          if (labelDateAtMidnight > todayAtMidnight) {
+            return null;
+          }
+          return counts[label] || 0;
+        });
+      } else if (filterType === 'semestral') {
+        const intervals = eachMonthOfInterval({ start: startDate, end: endDate });
+        const currentMonthStart = new Date(now.getFullYear(), now.getMonth(), 1).getTime();
+
+        data = labels.map((label, index) => {
+          const labelDate = intervals[index];
+          const labelMonthStart = new Date(labelDate.getFullYear(), labelDate.getMonth(), 1).getTime();
+
+          if (labelMonthStart > currentMonthStart) {
+            return null;
+          }
+          return counts[label] || 0;
+        });
+      } else {
+          data = labels.map(label => counts[label] || 0);
+      }
+
       return { labels, data };
     };
 
@@ -282,7 +389,7 @@ export default {
             datasets: [{
               label: 'Foot Traffic Count',
               data: footTrafficChartData.data,
-              borderColor: '#28a745', // A different color to distinguish
+              borderColor: '#28a745',
               fill: false,
               tension: 0.1
             }]
@@ -307,7 +414,7 @@ export default {
               x: {
                 title: {
                   display: true,
-                  text: filterType === 'daily' ? 'Hour (7 AM - 10 PM)' : filterType === 'weekly' ? 'Day' : filterType === 'monthly' ? 'Date' : 'Month'
+                  text: filterType === 'daily' ? 'Hour (12 AM - 11 PM)' : filterType === 'weekly' ? 'Day' : filterType === 'monthly' ? 'Date' : 'Month'
                 },
                 grid: {
                   display: false
@@ -365,7 +472,7 @@ export default {
               x: {
                 title: {
                   display: true,
-                  text: filterType === 'daily' ? 'Hour (7 AM - 10 PM)' : filterType === 'weekly' ? 'Day' : filterType === 'monthly' ? 'Date' : 'Month'
+                  text: filterType === 'daily' ? 'Hour (12 AM - 11 PM)' : filterType === 'weekly' ? 'Day' : filterType === 'monthly' ? 'Date' : 'Month'
                 },
                 grid: {
                   display: false
@@ -605,10 +712,8 @@ export default {
   border-radius: 8px;
   padding: 20px;
   box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
-  /* Remove min-height to allow fixed height to take effect */
-  /* min-height: 200px; */
-  height: 300px; /* Approximately 2 inches */
-  overflow: hidden; /* Prevent horizontal overflow */
+  height: 300px;
+  overflow: hidden;
 }
 
 .foot-traffic-chart-card h2,
@@ -621,8 +726,8 @@ export default {
 
 #footTrafficChart,
 #totalViolationChart {
-  width: 100%; /* Make the canvas take the full width of its parent */
-  height: 80%; /* Make the canvas take the full height of its parent */
+  width: 100%;
+  height: 80%;
 }
 
 .chart-placeholder {
@@ -632,6 +737,6 @@ export default {
   align-items: center;
   color: #ccc;
   font-style: italic;
-  width: 100%; /* Ensure placeholder also takes full width */
+  width: 100%;
 }
 </style>

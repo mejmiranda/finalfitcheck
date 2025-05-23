@@ -15,7 +15,6 @@
             </select>
           </div>
           <div class="refresh-info">
-            <span>Refreshing in: {{ refreshCountdown }}s</span>
             <button @click="manualRefresh" class="refresh-button">Refresh Now</button>
           </div>
         </div>
@@ -73,26 +72,23 @@ import supabase from '@/components/Supabase'; // Adjust the import path if neede
 export default {
   setup() {
     const searchQuery = ref('');
-    const sortBy = ref('date_recorded_desc'); // Default sort
-    const bulkAction = ref('');
+    const sortBy = ref('date_recorded_desc'); // Default sort: will now effectively sort by `created_at`
     const notifications = ref([]);
     const loading = ref(false);
     const error = ref(null);
-    const refreshCountdown = ref(10);
+    const refreshCountdown = ref(5); // Adjusted for 5-second auto-refresh
     let refreshInterval = null;
     let countdownInterval = null;
+    let supabaseSubscription = null; // Store the subscription object
 
     const filteredNotifications = computed(() => {
       let sortedNotifications = [...notifications.value];
 
-      if (sortBy.value === 'date_recorded_desc') {
-        sortedNotifications.sort((a, b) => new Date(b.date_recorded || b.date_settled || b.created_at) - new Date(a.date_recorded || a.date_settled || a.created_at));
-      } else if (sortBy.value === 'date_recorded_asc') {
-        sortedNotifications.sort((a, b) => new Date(a.date_recorded || a.date_settled || a.created_at) - new Date(b.date_recorded || b.date_settled || b.created_at));
-      } else if (sortBy.value === 'is_read_asc') {
-        sortedNotifications.sort((a, b) => (a.is_read ? 1 : -1) - (b.is_read ? 1 : -1));
-      } else if (sortBy.value === 'is_read_desc') {
-        sortedNotifications.sort((a, b) => (a.is_read ? -1 : 1) - (b.is_read ? -1 : 1));
+      // Sort by the `created_at` property which now represents the event's timestamp
+      if (sortBy.value === 'date_recorded_desc') { // "Newest"
+        sortedNotifications.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+      } else if (sortBy.value === 'date_recorded_asc') { // "Oldest"
+        sortedNotifications.sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
       }
 
       return sortedNotifications.filter((notification) => {
@@ -111,24 +107,35 @@ export default {
     };
 
     const getNotificationClass = (notification) => {
-      if (!notification.statusreal && notification.date_recorded) {
-        const threeDaysAfterRecord = moment(notification.date_recorded).add(3, 'days');
-        if (moment().isAfter(threeDaysAfterRecord)) {
-          return 'overdue';
+      if (notification.type === 'settled') {
+        return 'settled'; // Class for explicit "settled" event notifications
+      } else if (notification.type === 'overdue') {
+        return 'overdue'; // Class for overdue initial violations
+      } else if (notification.type === 'violation') {
+        // This is an initial violation notification
+        if (notification.is_read) {
+          return 'read'; // If the original violation has been handled (settled)
         }
-        return 'new'; // Consider as new if not settled and not overdue
-      } else if (notification.statusreal && notification.date_settled) {
-        return 'settled';
-      } else if (notification.is_read) {
-        return 'read';
+        return 'new'; // If it's a new, unhandled violation
       }
-      return '';
+      return ''; // Default or unknown type
     };
 
     const fetchNotifications = async () => {
       loading.value = true;
       error.value = null;
       try {
+        // Calculate start and end of the current day in PHT (UTC+8)
+        const today = new Date(); // This is a local Date object (PHT)
+        const startOfDayPHT = new Date(today.getFullYear(), today.getMonth(), today.getDate(), 0, 0, 0, 0);
+        const endOfDayPHT = new Date(today.getFullYear(), today.getMonth(), today.getDate(), 23, 59, 59, 999);
+
+        // Convert to ISO strings for Supabase query
+        const startISO = startOfDayPHT.toISOString();
+        const endISO = endOfDayPHT.toISOString();
+
+        console.log('Fetching notifications for PHT day:', startOfDayPHT, 'to', endOfDayPHT);
+
         const { data, error: fetchError } = await supabase
           .from('activity_logs')
           .select(`
@@ -143,23 +150,64 @@ export default {
               name
             )
           `)
-          .order('date_recorded', { ascending: false });
+          .or( // This 'or' condition ensures we get records where EITHER date_recorded OR date_settled is today
+            `and(date_recorded.gte.${startISO},date_recorded.lte.${endISO}),` +
+            `and(date_settled.gte.${startISO},date_settled.lte.${endISO})`
+          )
+          .order('date_recorded', { ascending: false }); // Order by recorded date for initial fetch
 
         if (fetchError) {
           console.error('Error fetching activity logs:', fetchError);
           error.value = fetchError.message;
         } else {
-          notifications.value = data.map(log => ({
-            id: log.id,
-            type: log.statusreal && log.date_settled ? 'settled' : (!log.statusreal && log.date_recorded && moment().isAfter(moment(log.date_recorded).add(3, 'days')) ? 'overdue' : 'violation'),
-            created_at: log.date_recorded,
-            date_settled: log.date_settled,
-            date_recorded: log.date_recorded,
-            students: log.students,
-            violation_categories: log.violation_categories,
-            is_read: !!(log.statusreal && log.date_settled),
-            statusreal: log.statusreal,
-          }));
+          const generatedNotifications = [];
+          data.forEach(log => {
+            // 1. Create the 'violation' or 'overdue' notification
+            // This represents the initial violation event.
+            // Only add if the violation happened today OR it's overdue (which implicitly means it started before today)
+            // But with the Supabase filter, it must have happened today to be included.
+            // If it's settled today, but recorded yesterday, the 'violation' notification will show 'read' status.
+            
+            // Check if the original violation date is within today's range
+            const recordedDateMoment = moment(log.date_recorded);
+            const isRecordedToday = recordedDateMoment.isBetween(startOfDayPHT, endOfDayPHT, null, '[]'); // [] means inclusive
+
+            // Only add the original violation if it was recorded today, or if it's settled today (to show its "read" state)
+            // The Supabase query already handles records where recorded or settled is today.
+            // So, just create the notification based on the log's original state.
+            const isOverdue = !log.statusreal && log.date_recorded && moment().isAfter(moment(log.date_recorded).add(3, 'days'));
+            
+            // Ensure we don't add the original violation if it's past today AND settled today
+            // The filter means it MUST be related to today anyway.
+            if (isRecordedToday || (log.statusreal && moment(log.date_settled).isBetween(startOfDayPHT, endOfDayPHT, null, '[]'))) {
+                generatedNotifications.push({
+                    id: log.id, // Use the original log ID for this notification
+                    type: isOverdue ? 'overdue' : 'violation',
+                    created_at: log.date_recorded, // The timestamp of the initial violation
+                    students: log.students,
+                    violation_categories: log.violation_categories,
+                    is_read: !!log.statusreal, // This "violation" notification is 'read' if its statusreal is true (i.e., settled)
+                    statusreal: log.statusreal, // Keep original statusreal for this entry
+                });
+            }
+
+
+            // 2. If the violation is settled, create a separate 'settled' notification
+            // This notification will only be created if date_settled is within today's range (due to Supabase filter)
+            if (log.statusreal && log.date_settled) {
+              generatedNotifications.push({
+                id: `${log.id}-settled`, // Unique ID for the settled event notification
+                type: 'settled',
+                created_at: log.date_settled, // The timestamp of the settlement
+                students: log.students,
+                violation_categories: log.violation_categories,
+                is_read: true, // A settled notification is inherently "read"
+                statusreal: log.statusreal, // Redundant but harmless for this type
+              });
+            }
+          });
+          // Assign the combined list to notifications. The computed property will then handle final sorting.
+          notifications.value = generatedNotifications;
         }
       } catch (err) {
         console.error('Unexpected error fetching activity logs:', err);
@@ -170,14 +218,18 @@ export default {
     };
 
     const subscribeToActivityLogs = () => {
-      const subscription = supabase
-        .channel('activity_logs_changes')
-        .on('postgres_changes', 
+      // Unsubscribe from previous channel if it exists
+      if (supabaseSubscription) {
+        supabase.removeChannel(supabaseSubscription);
+      }
+      supabaseSubscription = supabase // Store the subscription
+        .channel('activity_logs_changes_notifications') // Use a unique channel name
+        .on('postgres_changes',
           {
-            event: '*', 
+            event: '*',
             schema: 'public',
             table: 'activity_logs'
-          }, 
+          },
           (payload) => {
             console.log('Real-time update received:', payload);
             // Refresh the data when any change happens to the activity_logs table
@@ -185,146 +237,42 @@ export default {
           }
         )
         .subscribe();
-
-      // Return the subscription for cleanup
-      return subscription;
     };
 
     const setupAutoRefresh = () => {
-      // Set up page refresh every 10 seconds
-      refreshInterval = setInterval(() => {
-        window.location.reload();
-      }, 10000);
+      // Clear any existing intervals to prevent duplicates if called multiple times
+      if (refreshInterval) clearInterval(refreshInterval);
+      if (countdownInterval) clearInterval(countdownInterval);
 
-      // Set up countdown timer
+      // Set up data refresh (calls fetchNotifications)
+      refreshInterval = setInterval(() => {
+        fetchNotifications(); // Refresh data, not the whole page
+      }, 5000); // Refreshes data every 5 seconds
+
+      // Set up countdown timer for display
       countdownInterval = setInterval(() => {
         refreshCountdown.value -= 1;
         if (refreshCountdown.value <= 0) {
-          refreshCountdown.value = 10;
+          refreshCountdown.value = 5; // Reset countdown for the 5-second interval
         }
-      }, 1000);
+      }, 5000);
     };
 
     const manualRefresh = () => {
-      window.location.reload();
-    };
-
-    const markAsRead = async (id) => {
-      try {
-        const { error: updateError } = await supabase
-          .from('activity_logs')
-          .update({ statusreal: true, date_settled: new Date() })
-          .eq('id', id);
-
-        if (updateError) {
-          console.error('Error marking as settled:', updateError);
-          alert('Failed to mark as settled.');
-        } else {
-          const index = notifications.value.findIndex((n) => n.id === id);
-          if (index !== -1) {
-            notifications.value[index].statusreal = true;
-            notifications.value[index].date_settled = new Date();
-            notifications.value[index].is_read = true;
-            notifications.value[index].type = 'settled';
-          }
-        }
-      } catch (err) {
-        console.error('Unexpected error marking as settled:', err);
-        alert('An unexpected error occurred while marking as settled.');
-      }
-    };
-
-    const markAsUnread = async (id) => {
-      try {
-        const { error: updateError } = await supabase
-          .from('activity_logs')
-          .update({ statusreal: false, date_settled: null })
-          .eq('id', id);
-
-        if (updateError) {
-          console.error('Error marking as unsettled:', updateError);
-          alert('Failed to mark as unsettled.');
-        } else {
-          const index = notifications.value.findIndex((n) => n.id === id);
-          if (index !== -1) {
-            notifications.value[index].statusreal = false;
-            notifications.value[index].date_settled = null;
-            notifications.value[index].is_read = false;
-            notifications.value[index].type = 'violation';
-          }
-        }
-      } catch (err) {
-        console.error('Unexpected error marking as unsettled:', err);
-        alert('An unexpected error occurred while marking as unsettled.');
-      }
-    };
-
-    const applyBulkAction = async () => {
-      if (bulkAction.value === 'read') {
-        const unreadNotifications = notifications.value.filter(n => !n.is_read);
-        if (unreadNotifications.length > 0) {
-          loading.value = true;
-          try {
-            const idsToUpdate = unreadNotifications.map(n => n.id);
-            const { error: bulkUpdateError } = await supabase
-              .from('activity_logs')
-              .update({ statusreal: true, date_settled: new Date() })
-              .in('id', idsToUpdate);
-
-            if (bulkUpdateError) {
-              console.error('Error marking all as read:', bulkUpdateError);
-              alert('Failed to mark all as read.');
-            } else {
-              notifications.value = notifications.value.map(n => ({ ...n, is_read: true, statusreal: true, date_settled: n.date_settled || new Date(), type: 'settled' }));
-            }
-          } catch (err) {
-            console.error('Unexpected error marking all as read:', err);
-            alert('An unexpected error occurred while marking all as read.');
-          } finally {
-            loading.value = false;
-            bulkAction.value = '';
-          }
-        } else {
-          alert('No unread notifications to mark as read.');
-        }
-      } else if (bulkAction.value === 'unread') {
-        const readNotifications = notifications.value.filter(n => n.is_read);
-        if (readNotifications.length > 0) {
-          loading.value = true;
-          try {
-            const idsToUpdate = readNotifications.map(n => n.id);
-            const { error: bulkUpdateError } = await supabase
-              .from('activity_logs')
-              .update({ statusreal: false, date_settled: null })
-              .in('id', idsToUpdate);
-
-            if (bulkUpdateError) {
-              console.error('Error marking all as unread:', bulkUpdateError);
-              alert('Failed to mark all as unread.');
-            } else {
-              notifications.value = notifications.value.map(n => ({ ...n, is_read: false, statusreal: false, date_settled: null, type: 'violation' }));
-            }
-          } catch (err) {
-            console.error('Unexpected error marking all as unread:', err);
-            alert('An unexpected error occurred while marking all as unread.');
-          } finally {
-            loading.value = false;
-            bulkAction.value = '';
-          }
-        } else {
-          alert('No read notifications to mark as unread.');
-        }
-      }
+      fetchNotifications(); // Just fetch new data
+      refreshCountdown.value = 5; // Reset countdown for the visual timer
     };
 
     onMounted(() => {
       fetchNotifications();
-      const subscription = subscribeToActivityLogs();
+      subscribeToActivityLogs();
       setupAutoRefresh();
-      
+
       // Clean up subscription and intervals when component is unmounted
       onUnmounted(() => {
-        subscription.unsubscribe();
+        if (supabaseSubscription) {
+          supabase.removeChannel(supabaseSubscription);
+        }
         if (refreshInterval) clearInterval(refreshInterval);
         if (countdownInterval) clearInterval(countdownInterval);
       });
@@ -333,17 +281,12 @@ export default {
     return {
       searchQuery,
       sortBy,
-      bulkAction,
       notifications,
       filteredNotifications,
       formatDate,
       getNotificationClass,
       loading,
       error,
-      markAsRead,
-      markAsUnread,
-      applyBulkAction,
-      subscribeToActivityLogs,
       refreshCountdown,
       manualRefresh
     };
@@ -352,7 +295,147 @@ export default {
 </script>
 
 <style scoped>
-/* Existing styles */
+/* Your existing styles (no changes needed here) */
+.notifications-container {
+  font-family: sans-serif;
+  padding: 20px;
+}
+
+.notifications-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 20px;
+}
+
+.notifications-header h1 {
+  margin: 0;
+}
+
+.actions {
+  display: flex;
+  gap: 20px;
+  align-items: center;
+}
+
+.search-bar input {
+  padding: 8px;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+}
+
+.header-controls {
+  display: flex;
+  gap: 20px;
+  align-items: center;
+}
+
+.sort-by {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.sort-by select {
+  padding: 8px;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+}
+
+.refresh-info {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 0.9em;
+}
+
+.refresh-button {
+  padding: 6px 12px;
+  background-color: #f0f0f0;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 0.9em;
+  transition: background-color 0.2s;
+}
+
+.refresh-button:hover {
+  background-color: #e0e0e0;
+}
+
+.notifications-list {
+  list-style: none;
+  padding: 0;
+}
+
+.notification-item {
+  background-color: #f9f9f9;
+  border: 1px solid #eee;
+  border-radius: 4px;
+  padding: 15px;
+  margin-bottom: 10px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.notification-content {
+  flex-grow: 1;
+  margin-right: 10px;
+}
+
+.notification-item.new {
+  border-left: 5px solid #007bff; /* Unsettled, not overdue */
+}
+
+.notification-item.settled {
+  border-left: 5px solid #28a745; /* Explicit settled event */
+  background-color: #e6ffe6; /* Lighter green background for settled event */
+}
+
+.notification-item.overdue {
+  border-left: 5px solid #dc3545; /* Overdue initial violation */
+}
+
+.notification-item.read {
+  /* This applies to the *original violation* notification once it's settled */
+  background-color: #f0f0f0; /* Greyed out background */
+  color: #777;
+  border-left: 5px solid #ccc; /* Grey border for handled/read initial violations */
+}
+
+.notification-item.read .user-name,
+.notification-item.read .violation {
+  font-weight: normal;
+  font-style: normal;
+  color: #777;
+}
+
+.user-name {
+  font-weight: bold;
+}
+
+.violation {
+  font-style: italic;
+}
+
+.date {
+  color: #777;
+}
+
+.empty-message {
+  text-align: center;
+  color: #999;
+}
+
+.loading-message {
+  text-align: center;
+  color: #999;
+  padding: 15px;
+}
+</style>
+
+<style scoped>
 .notifications-container {
   font-family: sans-serif;
   padding: 20px;
