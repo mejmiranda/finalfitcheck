@@ -14,6 +14,10 @@
               <option value="date_recorded_asc">Oldest</option>
             </select>
           </div>
+          <div class="refresh-info">
+            <span>Refreshing in: {{ refreshCountdown }}s</span>
+            <button @click="manualRefresh" class="refresh-button">Refresh Now</button>
+          </div>
         </div>
       </div>
     </div>
@@ -62,7 +66,7 @@
 </template>
 
 <script>
-import { ref, computed, onMounted } from 'vue';
+import { ref, computed, onMounted, onUnmounted } from 'vue';
 import moment from 'moment';
 import supabase from '@/components/Supabase'; // Adjust the import path if needed
 
@@ -74,6 +78,9 @@ export default {
     const notifications = ref([]);
     const loading = ref(false);
     const error = ref(null);
+    const refreshCountdown = ref(10);
+    let refreshInterval = null;
+    let countdownInterval = null;
 
     const filteredNotifications = computed(() => {
       let sortedNotifications = [...notifications.value];
@@ -100,7 +107,7 @@ export default {
     });
 
     const formatDate = (date) => {
-      return date ? moment(date).format('YYYY-MM-DD HH:mm:ss') : 'N/A';
+      return date ? moment(date).utcOffset('+08:00').format('YYYY-MM-DD h:mm:ss A') : 'N/A';
     };
 
     const getNotificationClass = (notification) => {
@@ -160,6 +167,46 @@ export default {
       } finally {
         loading.value = false;
       }
+    };
+
+    const subscribeToActivityLogs = () => {
+      const subscription = supabase
+        .channel('activity_logs_changes')
+        .on('postgres_changes', 
+          {
+            event: '*', 
+            schema: 'public',
+            table: 'activity_logs'
+          }, 
+          (payload) => {
+            console.log('Real-time update received:', payload);
+            // Refresh the data when any change happens to the activity_logs table
+            fetchNotifications();
+          }
+        )
+        .subscribe();
+
+      // Return the subscription for cleanup
+      return subscription;
+    };
+
+    const setupAutoRefresh = () => {
+      // Set up page refresh every 10 seconds
+      refreshInterval = setInterval(() => {
+        window.location.reload();
+      }, 10000);
+
+      // Set up countdown timer
+      countdownInterval = setInterval(() => {
+        refreshCountdown.value -= 1;
+        if (refreshCountdown.value <= 0) {
+          refreshCountdown.value = 10;
+        }
+      }, 1000);
+    };
+
+    const manualRefresh = () => {
+      window.location.reload();
     };
 
     const markAsRead = async (id) => {
@@ -270,7 +317,18 @@ export default {
       }
     };
 
-    onMounted(fetchNotifications);
+    onMounted(() => {
+      fetchNotifications();
+      const subscription = subscribeToActivityLogs();
+      setupAutoRefresh();
+      
+      // Clean up subscription and intervals when component is unmounted
+      onUnmounted(() => {
+        subscription.unsubscribe();
+        if (refreshInterval) clearInterval(refreshInterval);
+        if (countdownInterval) clearInterval(countdownInterval);
+      });
+    });
 
     return {
       searchQuery,
@@ -285,6 +343,9 @@ export default {
       markAsRead,
       markAsUnread,
       applyBulkAction,
+      subscribeToActivityLogs,
+      refreshCountdown,
+      manualRefresh
     };
   },
 };
@@ -355,6 +416,27 @@ export default {
   padding: 8px;
   border: 1px solid #ccc;
   border-radius: 4px;
+}
+
+.refresh-info {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 0.9em;
+}
+
+.refresh-button {
+  padding: 6px 12px;
+  background-color: #f0f0f0;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 0.9em;
+  transition: background-color 0.2s;
+}
+
+.refresh-button:hover {
+  background-color: #e0e0e0;
 }
 
 .notifications-list {
