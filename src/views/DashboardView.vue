@@ -173,8 +173,9 @@ export default {
   methods: {
     formatDate(isoString) {
       if (!isoString) return '';
-      // Parse as UTC, then convert to PHT for display
-      return moment.utc(isoString).tz('Asia/Manila').format('YYYY-MM-DD h:mm:ss A');
+      // Change: Let moment intelligently parse the ISO string first, then convert to PHT
+      // This handles cases where 'isoString' might include 'Z' for UTC or a timezone offset
+      return moment(isoString).tz('Asia/Manila').format('YYYY-MM-DD h:mm:ss A');
     },
     async fetchActivityLogsWithDetails() {
       this.loading = true;

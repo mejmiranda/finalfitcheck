@@ -11,6 +11,7 @@ import StudentDashboard from '@/views/StudentDashboard.vue';
 import StudentMainLayout from '@/components/StudentMainLayout.vue';
 import StudentProfile from '@/views/StudentProfile.vue';
 import SettleViolation from '@/views/SettleViolation.vue';
+import NoViolationView from '@/views/NoViolationView.vue';
 
 const routes: Array<RouteRecordRaw> = [
   {
@@ -58,6 +59,11 @@ const routes: Array<RouteRecordRaw> = [
         path: '',
         name: 'Dashboard',
         component: DashboardView,
+      },
+            {
+        path: '/noviolation',
+        name: 'NoViolation',
+        component: NoViolationView,
       },
       {
         path: '/activity-log',

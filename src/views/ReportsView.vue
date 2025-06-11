@@ -73,13 +73,16 @@
 </template>
 
 <script>
-import { ref, onMounted, watch } from 'vue';
+import { ref, onMounted, watch, onUnmounted } from 'vue';
 import supabase from '@/components/Supabase'; // Adjust the import path if needed
 import unifvioIcon from '@/assets/unifvio.png';
 import idvioIcon from '@/assets/idvio.png';
 import civivioIcon from '@/assets/civivio.png';
-import { startOfWeek, endOfWeek, startOfMonth, endOfMonth, format as formatDate, eachDayOfInterval, eachWeekOfInterval, eachMonthOfInterval } from 'date-fns';
+// Using date-fns for interval calculations, but Moment-timezone for exact date handling
+import { eachDayOfInterval, eachWeekOfInterval, eachMonthOfInterval, format as formatDateFns } from 'date-fns';
 import { Chart, registerables } from 'chart.js';
+import moment from 'moment-timezone'; // Import moment-timezone
+
 Chart.register(...registerables);
 
 export default {
@@ -95,79 +98,92 @@ export default {
     const footTrafficChartInstance = ref(null);
     const totalViolationChartInstance = ref(null);
 
-    const fetchReportData = async (filterType = 'daily') => {
+    let supabaseSubscriptionActivityLogs = null; // New ref for activity_logs subscription
+    let supabaseSubscriptionFootCounts = null; // New ref for foot_counts subscription
+
+    // Helper to format dates consistently for display (using moment-timezone)
+    const formatDate = (date) => {
+      // Assuming 'date' coming from Supabase is a naive timestamp string
+      // Interpret it as PHT for display
+      return date ? moment.tz(date, 'Asia/Manila').format('YYYY-MM-DD h:mm:ss A') : '';
+    };
+
+    const fetchReportData = async (filterType = sortBy.value) => {
       loading.value = true;
       error.value = null;
       try {
-        const today = new Date(); // This `today` is a local Date object (PHT)
-
-        let startDate, endDate;
+        // FIX: Use moment-timezone to define "today" in 'Asia/Manila' and format as timezone-agnostic strings for querying `timestamp` columns
+        const nowManila = moment().tz('Asia/Manila');
+        let startDateMoment, endDateMoment;
 
         if (filterType === 'daily') {
-          startDate = new Date(today);
-          startDate.setHours(0, 0, 0, 0); // Start at 12 AM (00:00) PHT
-          endDate = new Date(today);
-          endDate.setHours(23, 59, 59, 999); // End at 11:59:59 PM (23:59:59) PHT
+          startDateMoment = nowManila.clone().startOf('day');
+          endDateMoment = nowManila.clone().endOf('day');
         } else if (filterType === 'weekly') {
-          startDate = startOfWeek(today, { weekStartsOn: 1 }); // Monday
-          endDate = endOfWeek(today, { weekStartsOn: 1 }); // Sunday
-          endDate.setDate(endDate.getDate() - 1); // Adjust to Saturday (as per your previous logic)
-          endDate.setHours(23, 59, 59, 999);
-          startDate.setHours(0, 0, 0, 0);
+          // Adjust for Monday-Saturday week as per user's previous logic
+          // startOfWeek with weekStartsOn: 1 (Monday), then adjust endDate to Saturday
+          startDateMoment = nowManila.clone().startOf('isoWeek'); // ISO week starts on Monday
+          endDateMoment = startDateMoment.clone().add(5, 'days').endOf('day'); // End of Saturday
         } else if (filterType === 'monthly') {
-          startDate = startOfMonth(today);
-          endDate = endOfMonth(today);
-          startDate.setHours(0, 0, 0, 0);
-          endDate = new Date(endDate.getFullYear(), endDate.getMonth(), endDate.getDate(), 23, 59, 59, 999);
+          startDateMoment = nowManila.clone().startOf('month');
+          endDateMoment = nowManila.clone().endOf('month');
         } else if (filterType === 'semestral') {
-          const currentMonth = today.getMonth() + 1;
-          let year = today.getFullYear();
-          if (currentMonth >= 1 && currentMonth <= 5) { // January to May
-            startDate = new Date(year, 0, 1, 0, 0, 0, 0); // January 1st
-            endDate = new Date(year, 4, 31, 23, 59, 59, 999); // May 31st
-          } else { // August to December
-            startDate = new Date(year, 7, 1, 0, 0, 0, 0); // August 1st
-            endDate = new Date(year, 11, 31, 23, 59, 59, 999); // December 31st
+          const currentMonth = nowManila.month(); // 0-indexed month
+          if (currentMonth >= 0 && currentMonth <= 4) { // January (0) to May (4)
+            startDateMoment = nowManila.clone().month(0).startOf('month'); // January 1st
+            endDateMoment = nowManila.clone().month(4).endOf('month');   // May 31st
+          } else { // August (7) to December (11)
+            startDateMoment = nowManila.clone().month(7).startOf('month'); // August 1st
+            endDateMoment = nowManila.clone().month(11).endOf('month'); // December 31st
           }
         }
 
-        console.log('Fetching data for:', filterType, 'from:', startDate, 'to:', endDate); // Debugging
+        // Format to 'YYYY-MM-DD HH:mm:ss' which is what `timestamp` columns effectively use for comparison
+        const startTimestampString = startDateMoment.format('YYYY-MM-DD HH:mm:ss');
+        const endTimestampString = endDateMoment.format('YYYY-MM-DD HH:mm:ss');
+
+        console.log('--- Fetching Report Data Debug Info ---');
+        console.log('Filter Type:', filterType);
+        console.log('Manila Period Start:', startDateMoment.format());
+        console.log('Manila Period End:', endDateMoment.format());
+        console.log('Supabase Query Range (Timestamp Strings):');
+        console.log('  startTimestampString:', startTimestampString);
+        console.log('  endTimestampString:', endTimestampString);
 
         // Fetch violation logs from Supabase for the entire period
         const { data: allFilteredLogs, error: filteredLogsError } = await supabase
           .from('activity_logs')
           .select('date_recorded, violation_categories(name), statusreal')
-          .gte('date_recorded', startDate.toISOString())
-          .lte('date_recorded', endDate.toISOString());
+          .gte('date_recorded', startTimestampString) // Use timezone-agnostic strings
+          .lte('date_recorded', endTimestampString); // Use timezone-agnostic strings
 
         if (filteredLogsError) throw filteredLogsError;
+        console.log('Raw activity_logs data from Supabase:', allFilteredLogs);
+
 
         // Apply "live" filtering to the logs based on current time BEFORE calculating counts
         let currentLiveLogs = [];
-        const now = new Date(); // Current local time for "live" cut-off
+        const now = moment().tz('Asia/Manila'); // Current local time for "live" cut-off
 
         if (filterType === 'daily') {
-          const currentHour = now.getHours();
           currentLiveLogs = allFilteredLogs.filter(log => {
-            const logDate = new Date(log.date_recorded);
-            return logDate.getHours() <= currentHour;
+            const logDateMoment = moment.tz(log.date_recorded, 'Asia/Manila');
+            // Only include logs up to the current hour (inclusive)
+            return logDateMoment.hours() <= now.hours();
           });
         } else if (filterType === 'weekly' || filterType === 'monthly') {
-          const todayAtMidnight = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
           currentLiveLogs = allFilteredLogs.filter(log => {
-            const logDate = new Date(log.date_recorded);
-            const logDayAtMidnight = new Date(logDate.getFullYear(), logDate.getMonth(), logDate.getDate()).getTime();
-            return logDayAtMidnight <= todayAtMidnight;
+            const logDateMoment = moment.tz(log.date_recorded, 'Asia/Manila');
+            // Only include logs up to the current day (inclusive)
+            return logDateMoment.isSameOrBefore(now, 'day');
           });
         } else if (filterType === 'semestral') {
-          const currentMonthStart = new Date(now.getFullYear(), now.getMonth(), 1).getTime();
           currentLiveLogs = allFilteredLogs.filter(log => {
-            const logDate = new Date(log.date_recorded);
-            const logMonthStart = new Date(logDate.getFullYear(), logDate.getMonth(), 1).getTime();
-            return logMonthStart <= currentMonthStart;
+            const logDateMoment = moment.tz(log.date_recorded, 'Asia/Manila');
+            // Only include logs up to the current month (inclusive)
+            return logDateMoment.isSameOrBefore(now, 'month');
           });
         } else {
-          // Fallback for any other filter types if needed (though not currently defined)
           currentLiveLogs = allFilteredLogs;
         }
 
@@ -194,15 +210,16 @@ export default {
         const { data: footTrafficData, error: footTrafficError } = await supabase
           .from('foot_counts')
           .select('timestamp, count')
-          .gte('timestamp', startDate.toISOString())
-          .lte('timestamp', endDate.toISOString())
+          .gte('timestamp', startTimestampString) // Use timezone-agnostic strings
+          .lte('timestamp', endTimestampString)   // Use timezone-agnostic strings
           .order('timestamp', { ascending: true });
 
         if (footTrafficError) throw footTrafficError;
+        console.log('Raw foot_counts data from Supabase:', footTrafficData);
 
         // The charts will then take these time-filtered logs and apply their own nulling logic
         // for future time points, ensuring consistency.
-        updateCharts(currentLiveLogs, footTrafficData, filterType, startDate, endDate);
+        updateCharts(currentLiveLogs, footTrafficData, filterType, startDateMoment, endDateMoment); // Pass Moment objects
 
         console.log('Fetched and processed report data for:', filterType, {
           total: totalViolationsCount.value,
@@ -219,73 +236,66 @@ export default {
       }
     };
 
-    // The rest of your script (prepareChartData, prepareFootTrafficChartData, updateCharts, etc.)
-    // remains the same, as they are already set up to handle live data and the current time `now`.
-
-    const prepareChartData = (logs, filterType, startDate, endDate) => {
+    const prepareChartData = (logs, filterType, startDateMoment, endDateMoment) => {
       const counts = {};
       let labels = [];
-      const now = new Date();
+      const now = moment().tz('Asia/Manila');
 
       if (filterType === 'daily') {
         labels = Array.from({ length: 24 }, (_, i) => `${String(i).padStart(2, '0')}:00`);
         logs.forEach(log => {
-          const hour = new Date(log.date_recorded).getHours();
+          const hour = moment.tz(log.date_recorded, 'Asia/Manila').hours();
           const hourLabel = `${String(hour).padStart(2, '0')}:00`;
           counts[hourLabel] = (counts[hourLabel] || 0) + 1;
         });
       } else if (filterType === 'weekly') {
-        const days = eachDayOfInterval({ start: startDate, end: endDate });
-        labels = days.map(date => formatDate(date, 'EEE'));
+        const days = eachDayOfInterval({ start: startDateMoment.toDate(), end: endDateMoment.toDate() });
+        labels = days.map(date => formatDateFns(date, 'EEE'));
         logs.forEach(log => {
-          const day = formatDate(new Date(log.date_recorded), 'EEE');
+          const day = formatDateFns(moment.tz(log.date_recorded, 'Asia/Manila').toDate(), 'EEE');
           counts[day] = (counts[day] || 0) + 1;
         });
       } else if (filterType === 'monthly') {
-        const days = eachDayOfInterval({ start: startDate, end: endDate });
-        labels = days.map(date => formatDate(date, 'd'));
+        const days = eachDayOfInterval({ start: startDateMoment.toDate(), end: endDateMoment.toDate() });
+        labels = days.map(date => formatDateFns(date, 'd'));
         logs.forEach(log => {
-          const day = formatDate(new Date(log.date_recorded), 'd');
+          const day = formatDateFns(moment.tz(log.date_recorded, 'Asia/Manila').toDate(), 'd');
           counts[day] = (counts[day] || 0) + 1;
         });
       } else if (filterType === 'semestral') {
-        const months = eachMonthOfInterval({ start: startDate, end: endDate });
-        labels = months.map(date => formatDate(date, 'MMM'));
+        const months = eachMonthOfInterval({ start: startDateMoment.toDate(), end: endDateMoment.toDate() });
+        labels = months.map(date => formatDateFns(date, 'MMM'));
         logs.forEach(log => {
-          const month = formatDate(new Date(log.date_recorded), 'MMM');
+          const month = formatDateFns(moment.tz(log.date_recorded, 'Asia/Manila').toDate(), 'MMM');
           counts[month] = (counts[month] || 0) + 1;
         });
       }
 
       let data;
       if (filterType === 'daily') {
-        const currentHour = now.getHours();
+        const currentHour = now.hours(); // Use moment.hours()
         data = labels.map(label => {
           const hour = parseInt(label.split(':')[0]);
           return (hour > currentHour) ? null : (counts[label] || 0);
         });
       } else if (filterType === 'weekly' || filterType === 'monthly') {
-        const intervals = eachDayOfInterval({ start: startDate, end: endDate });
-        const todayAtMidnight = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+        const intervals = eachDayOfInterval({ start: startDateMoment.toDate(), end: endDateMoment.toDate() });
+        const todayAtMidnight = now.clone().startOf('day'); // Use moment for comparison
 
         data = labels.map((label, index) => {
-          const labelDate = intervals[index];
-          const labelDateAtMidnight = new Date(labelDate.getFullYear(), labelDate.getMonth(), labelDate.getDate()).getTime();
-
-          if (labelDateAtMidnight > todayAtMidnight) {
+          const labelDate = moment(intervals[index]).tz('Asia/Manila').startOf('day');
+          if (labelDate.isAfter(todayAtMidnight)) {
             return null;
           }
           return counts[label] || 0;
         });
       } else if (filterType === 'semestral') {
-        const intervals = eachMonthOfInterval({ start: startDate, end: endDate });
-        const currentMonthStart = new Date(now.getFullYear(), now.getMonth(), 1).getTime();
+        const intervals = eachMonthOfInterval({ start: startDateMoment.toDate(), end: endDateMoment.toDate() });
+        const currentMonthStart = now.clone().startOf('month'); // Use moment for comparison
 
         data = labels.map((label, index) => {
-          const labelDate = intervals[index];
-          const labelMonthStart = new Date(labelDate.getFullYear(), labelDate.getMonth(), 1).getTime();
-
-          if (labelMonthStart > currentMonthStart) {
+          const labelDate = moment(intervals[index]).tz('Asia/Manila').startOf('month');
+          if (labelDate.isAfter(currentMonthStart)) {
             return null;
           }
           return counts[label] || 0;
@@ -297,70 +307,66 @@ export default {
       return { labels, data };
     };
 
-    const prepareFootTrafficChartData = (footTrafficData, filterType, startDate, endDate) => {
+    const prepareFootTrafficChartData = (footTrafficData, filterType, startDateMoment, endDateMoment) => {
       const counts = {};
       let labels = [];
-      const now = new Date();
+      const now = moment().tz('Asia/Manila');
 
       if (filterType === 'daily') {
         labels = Array.from({ length: 24 }, (_, i) => `${String(i).padStart(2, '0')}:00`);
         footTrafficData.forEach(item => {
-          const hour = new Date(item.timestamp).getHours();
+          const hour = moment.tz(item.timestamp, 'Asia/Manila').hours();
           const hourLabel = `${String(hour).padStart(2, '0')}:00`;
           counts[hourLabel] = (counts[hourLabel] || 0) + parseInt(item.count);
         });
       } else if (filterType === 'weekly') {
-        const days = eachDayOfInterval({ start: startDate, end: endDate });
-        labels = days.map(date => formatDate(date, 'EEE'));
+        const days = eachDayOfInterval({ start: startDateMoment.toDate(), end: endDateMoment.toDate() });
+        labels = days.map(date => formatDateFns(date, 'EEE'));
         footTrafficData.forEach(item => {
-          const day = formatDate(new Date(item.timestamp), 'EEE');
+          const day = formatDateFns(moment.tz(item.timestamp, 'Asia/Manila').toDate(), 'EEE');
           counts[day] = (counts[day] || 0) + parseInt(item.count);
         });
       } else if (filterType === 'monthly') {
-        const days = eachDayOfInterval({ start: startDate, end: endDate });
-        labels = days.map(date => formatDate(date, 'd'));
+        const days = eachDayOfInterval({ start: startDateMoment.toDate(), end: endDateMoment.toDate() });
+        labels = days.map(date => formatDateFns(date, 'd'));
         footTrafficData.forEach(item => {
-          const day = formatDate(new Date(item.timestamp), 'd');
+          const day = formatDateFns(moment.tz(item.timestamp, 'Asia/Manila').toDate(), 'd');
           counts[day] = (counts[day] || 0) + parseInt(item.count);
         });
       } else if (filterType === 'semestral') {
-        const months = eachMonthOfInterval({ start: startDate, end: endDate });
-        labels = months.map(date => formatDate(date, 'MMM'));
+        const months = eachMonthOfInterval({ start: startDateMoment.toDate(), end: endDateMoment.toDate() });
+        labels = months.map(date => formatDateFns(date, 'MMM'));
         footTrafficData.forEach(item => { // Corrected from `logs` to `footTrafficData`
-          const month = formatDate(new Date(item.timestamp), 'MMM');
+          const month = formatDateFns(moment.tz(item.timestamp, 'Asia/Manila').toDate(), 'MMM');
           counts[month] = (counts[month] || 0) + parseInt(item.count);
         });
       }
 
       let data;
       if (filterType === 'daily') {
-        const currentHour = now.getHours();
+        const currentHour = now.hours();
         data = labels.map(label => {
           const hour = parseInt(label.split(':')[0]);
           return (hour > currentHour) ? null : (counts[label] || 0);
         });
       } else if (filterType === 'weekly' || filterType === 'monthly') {
-        const intervals = eachDayOfInterval({ start: startDate, end: endDate });
-        const todayAtMidnight = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+        const intervals = eachDayOfInterval({ start: startDateMoment.toDate(), end: endDateMoment.toDate() });
+        const todayAtMidnight = now.clone().startOf('day');
 
         data = labels.map((label, index) => {
-          const labelDate = intervals[index];
-          const labelDateAtMidnight = new Date(labelDate.getFullYear(), labelDate.getMonth(), labelDate.getDate()).getTime();
-
-          if (labelDateAtMidnight > todayAtMidnight) {
+          const labelDate = moment(intervals[index]).tz('Asia/Manila').startOf('day');
+          if (labelDate.isAfter(todayAtMidnight)) {
             return null;
           }
           return counts[label] || 0;
         });
       } else if (filterType === 'semestral') {
-        const intervals = eachMonthOfInterval({ start: startDate, end: endDate });
-        const currentMonthStart = new Date(now.getFullYear(), now.getMonth(), 1).getTime();
+        const intervals = eachMonthOfInterval({ start: startDateMoment.toDate(), end: endDateMoment.toDate() });
+        const currentMonthStart = now.clone().startOf('month');
 
         data = labels.map((label, index) => {
-          const labelDate = intervals[index];
-          const labelMonthStart = new Date(labelDate.getFullYear(), labelDate.getMonth(), 1).getTime();
-
-          if (labelMonthStart > currentMonthStart) {
+          const labelDate = moment(intervals[index]).tz('Asia/Manila').startOf('month');
+          if (labelDate.isAfter(currentMonthStart)) {
             return null;
           }
           return counts[label] || 0;
@@ -372,9 +378,9 @@ export default {
       return { labels, data };
     };
 
-    const updateCharts = (violationLogs, footTrafficData, filterType, startDate, endDate) => {
+    const updateCharts = (violationLogs, footTrafficData, filterType, startDateMoment, endDateMoment) => {
       // Update Foot Traffic Chart
-      const footTrafficChartData = prepareFootTrafficChartData(footTrafficData, filterType, startDate, endDate);
+      const footTrafficChartData = prepareFootTrafficChartData(footTrafficData, filterType, startDateMoment, endDateMoment);
 
       if (footTrafficChartInstance.value) {
         footTrafficChartInstance.value.destroy();
@@ -432,7 +438,7 @@ export default {
       }
 
       // Update Total Violations Chart
-      const totalViolationData = prepareChartData(violationLogs, filterType, startDate, endDate);
+      const totalViolationData = prepareChartData(violationLogs, filterType, startDateMoment, endDateMoment);
 
       if (totalViolationChartInstance.value) {
         totalViolationChartInstance.value.destroy();
@@ -507,12 +513,58 @@ export default {
       return '';
     };
 
+    // Realtime Subscription Setup
+    const setupRealtimeSubscriptions = () => {
+      // Clear existing subscriptions to avoid duplicates
+      if (supabaseSubscriptionActivityLogs) {
+        supabase.removeChannel(supabaseSubscriptionActivityLogs);
+      }
+      if (supabaseSubscriptionFootCounts) {
+        supabase.removeChannel(supabaseSubscriptionFootCounts);
+      }
+
+      // Subscribe to activity_logs changes
+      supabaseSubscriptionActivityLogs = supabase
+        .channel('reports_activity_logs_channel')
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'activity_logs' }, payload => {
+          console.log('Realtime change in activity_logs detected:', payload);
+          fetchReportData(); // Re-fetch all report data
+        })
+        .subscribe();
+
+      // Subscribe to foot_counts changes
+      supabaseSubscriptionFootCounts = supabase
+        .channel('reports_foot_counts_channel')
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'foot_counts' }, payload => {
+          console.log('Realtime change in foot_counts detected:', payload);
+          fetchReportData(); // Re-fetch all report data
+        })
+        .subscribe();
+    };
+
+
     watch(sortBy, (newSortBy) => {
       fetchReportData(newSortBy);
     });
 
     onMounted(() => {
-      fetchReportData();
+      fetchReportData(); // Initial data fetch
+      setupRealtimeSubscriptions(); // Setup real-time listeners
+    });
+
+    onUnmounted(() => {
+      if (supabaseSubscriptionActivityLogs) {
+        supabase.removeChannel(supabaseSubscriptionActivityLogs);
+      }
+      if (supabaseSubscriptionFootCounts) {
+        supabase.removeChannel(supabaseSubscriptionFootCounts);
+      }
+      if (footTrafficChartInstance.value) {
+        footTrafficChartInstance.value.destroy();
+      }
+      if (totalViolationChartInstance.value) {
+        totalViolationChartInstance.value.destroy();
+      }
     });
 
     return {
@@ -525,8 +577,7 @@ export default {
       error,
       getViolationPercentage,
       getPolicyIcon,
-      footTrafficChartInstance,
-      totalViolationChartInstance,
+      // Chart instances are managed internally, no need to expose directly
     };
   },
 };
@@ -603,7 +654,7 @@ export default {
 
 .violation-counts-card {
   display: flex;
-  gap: 2;
+  gap: 20px; /* Adjusted gap for better spacing */
   text-align: center;
   align-items: center;
   justify-content: space-around;
@@ -680,6 +731,7 @@ export default {
   border: 1px solid #ddd;
   background-color: #f9f9f9;
   text-align: center;
+  flex: 1; /* Make them take equal width */
 }
 
 .violation-counts-card h2 {
@@ -714,6 +766,7 @@ export default {
   box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
   height: 300px;
   overflow: hidden;
+  position: relative; /* For canvas sizing */
 }
 
 .foot-traffic-chart-card h2,
@@ -726,8 +779,9 @@ export default {
 
 #footTrafficChart,
 #totalViolationChart {
-  width: 100%;
-  height: 80%;
+  width: 100% !important; /* Ensure canvas takes full width of parent */
+  height: 100% !important; /* Ensure canvas takes full height of parent */
+  max-height: 250px; /* Limit max height to prevent excessive stretching */
 }
 
 .chart-placeholder {

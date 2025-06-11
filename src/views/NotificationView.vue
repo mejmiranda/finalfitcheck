@@ -39,13 +39,15 @@
             <p>
               <span class="user-name">{{ notification.students?.student_name }}</span> has settled their violation
               regarding
-              <span class="violation">{{ notification.violation_categories?.name }}</span>
+              <span class="violation">{{ notification.violation_categories?.name }}</span> on
+              <span class="date">{{ formatDate(notification.created_at) }}</span>;
             </p>
           </template>
           <template v-else-if="notification.type === 'overdue'">
             <p class="overdue">
-              <span class="user-name">{{ notification.students?.student_name }}</span> has an overdue violation from
-              <span class="date">{{ formatDate(notification.date_recorded) }}</span> that remains unsettled;
+              <span class="user-name">{{ notification.students?.student_name }}</span> has an overdue violation
+              <span class="violation">{{ notification.violation_categories?.name }}</span> from
+              <span class="date">{{ formatDate(notification.created_at) }}</span> that remains unsettled;
             </p>
           </template>
           <template v-else>
@@ -65,7 +67,7 @@
 
 <script>
 import { ref, computed, onMounted, onUnmounted } from 'vue';
-import moment from 'moment';
+import moment from 'moment-timezone'; // Correctly import moment-timezone
 import supabase from '@/components/Supabase'; // Adjust the import path if needed
 
 export default {
@@ -102,7 +104,8 @@ export default {
     });
 
     const formatDate = (date) => {
-      return date ? moment(date).utcOffset('+08:00').format('YYYY-MM-DD h:mm:ss A') : '';
+      // For displaying, we still want to interpret the timestamp as PHT
+      return date ? moment.tz(date, 'Asia/Manila').format('YYYY-MM-DD h:mm:ss A') : '';
     };
 
     const getNotificationClass = (notification) => {
@@ -124,16 +127,22 @@ export default {
       loading.value = true;
       error.value = null;
       try {
-        // Calculate start and end of the current day in PHT (UTC+8)
-        const today = new Date(); // This is a local Date object (PHT)
-        const startOfDayPHT = new Date(today.getFullYear(), today.getMonth(), today.getDate(), 0, 0, 0, 0);
-        const endOfDayPHT = new Date(today.getFullYear(), today.getMonth(), today.getDate(), 23, 59, 59, 999);
+        // FIX: Define "today" in 'Asia/Manila' and format as timezone-agnostic strings for querying `timestamp` columns
+        const nowManila = moment().tz('Asia/Manila');
+        const startOfTodayManila = nowManila.clone().startOf('day');
+        const endOfTodayManila = nowManila.clone().endOf('day');
 
-        // Convert to ISO strings for Supabase query
-        const startISO = startOfDayPHT.toISOString();
-        const endISO = endOfDayPHT.toISOString();
+        // Format to 'YYYY-MM-DD HH:mm:ss' which is what `timestamp` columns effectively use for comparison
+        const startTimestampString = startOfTodayManila.format('YYYY-MM-DD HH:mm:ss');
+        const endTimestampString = endOfTodayManila.format('YYYY-MM-DD HH:mm:ss');
 
-        console.log('Fetching notifications for PHT day:', startOfDayPHT, 'to', endOfDayPHT);
+        console.log('--- Fetching Notifications Debug Info (Fixed Select Parameter) ---');
+        console.log('Manila Current Time:', nowManila.format());
+        console.log('Manila Start of Day:', startOfTodayManila.format());
+        console.log('Manila End of Day:', endOfTodayManila.format());
+        console.log('Supabase Query Range (Timestamp Strings):');
+        console.log('  startTimestampString:', startTimestampString);
+        console.log('  endTimestampString:', endTimestampString);
 
         const { data, error: fetchError } = await supabase
           .from('activity_logs')
@@ -147,65 +156,95 @@ export default {
             ),
             violation_categories (
               name
-            )
+            ),
+            due_date
           `)
-          .or( // This 'or' condition ensures we get records where EITHER date_recorded OR date_settled is today
-            `and(date_recorded.gte.${startISO},date_recorded.lte.${endISO}),` +
-            `and(date_settled.gte.${startISO},date_settled.lte.${endISO})`
+          .or( // Use the timezone-agnostic strings for comparison with `timestamp` columns
+            `and(date_recorded.gte.${startTimestampString},date_recorded.lte.${endTimestampString}),` +
+            `and(date_settled.gte.${startTimestampString},date_settled.lte.${endTimestampString}),` +
+            `and(due_date.gte.${startTimestampString},due_date.lte.${endTimestampString},statusreal.eq.false)`
           )
           .order('date_recorded', { ascending: false }); // Order by recorded date for initial fetch
 
         if (fetchError) {
-          console.error('Error fetching activity logs:', fetchError);
+          console.error('Supabase fetch error:', fetchError.message);
           error.value = fetchError.message;
         } else {
+          console.log('Supabase returned data:', data);
           const generatedNotifications = [];
           data.forEach(log => {
-            // 1. Create the 'violation' or 'overdue' notification
-            // This represents the initial violation event.
-            // Only add if the violation happened today OR it's overdue (which implicitly means it started before today)
-            // But with the Supabase filter, it must have happened today to be included.
-            // If it's settled today, but recorded yesterday, the 'violation' notification will show 'read' status.
-            
-            // Check if the original violation date is within today's range
-            const recordedDateMoment = moment(log.date_recorded);
-            const isRecordedToday = recordedDateMoment.isBetween(startOfDayPHT, endOfDayPHT, null, '[]'); // [] means inclusive
+            // For logical checks, convert the fetched timestamp strings (which are naive) to Moment objects
+            // and explicitly tell moment-timezone to interpret them as PHT.
+            const recordedDateMoment = log.date_recorded ? moment.tz(log.date_recorded, 'Asia/Manila') : null;
+            const settledDateMoment = log.date_settled ? moment.tz(log.date_settled, 'Asia/Manila') : null;
+            const dueDateMoment = log.due_date ? moment.tz(log.due_date, 'Asia/Manila') : null;
 
-            // Only add the original violation if it was recorded today, or if it's settled today (to show its "read" state)
-            // The Supabase query already handles records where recorded or settled is today.
-            // So, just create the notification based on the log's original state.
-            const isOverdue = !log.statusreal && log.date_recorded && moment().isAfter(moment(log.date_recorded).add(3, 'days'));
-            
-            // Ensure we don't add the original violation if it's past today AND settled today
-            // The filter means it MUST be related to today anyway.
-            if (isRecordedToday || (log.statusreal && moment(log.date_settled).isBetween(startOfDayPHT, endOfDayPHT, null, '[]'))) {
+            if (!recordedDateMoment) {
+                console.warn('Skipping log due to missing date_recorded:', log);
+                return; // Skip logs without a recorded date
+            }
+
+            const isRecordedToday = recordedDateMoment.isBetween(startOfTodayManila, endOfTodayManila, null, '[]');
+            const isSettledToday = settledDateMoment && settledDateMoment.isBetween(startOfTodayManila, endOfTodayManila, null, '[]');
+            const isDueTodayAndUnsettled = dueDateMoment && dueDateMoment.isBetween(startOfTodayManila, endOfTodayManila, null, '[]') && !log.statusreal;
+
+            console.log('--- Processing Log Item ---');
+            console.log('  Log Data:', log);
+            console.log('  Recorded Date (PHT):', recordedDateMoment.format());
+            console.log('  Is Recorded Today:', isRecordedToday);
+            console.log('  Settled Date (PHT):', settledDateMoment ? settledDateMoment.format() : 'N/A');
+            console.log('  Is Settled Today:', isSettledToday);
+            console.log('  Due Date (PHT):', dueDateMoment ? dueDateMoment.format() : 'N/A');
+            console.log('  Is Due Today & Unsettled:', isDueTodayAndUnsettled);
+
+
+            // 1. Create the 'violation' notification if recorded today
+            if (isRecordedToday) {
                 generatedNotifications.push({
                     id: log.id, // Use the original log ID for this notification
-                    type: isOverdue ? 'overdue' : 'violation',
-                    created_at: log.date_recorded, // The timestamp of the initial violation
+                    type: 'violation',
+                    created_at: log.date_recorded, // The timestamp of the initial violation (naive string)
                     students: log.students,
                     violation_categories: log.violation_categories,
                     is_read: !!log.statusreal, // This "violation" notification is 'read' if its statusreal is true (i.e., settled)
                     statusreal: log.statusreal, // Keep original statusreal for this entry
+                    date_recorded: log.date_recorded // Add date_recorded for overdue message template
                 });
             }
 
-
             // 2. If the violation is settled, create a separate 'settled' notification
-            // This notification will only be created if date_settled is within today's range (due to Supabase filter)
-            if (log.statusreal && log.date_settled) {
+            if (log.statusreal && isSettledToday) {
               generatedNotifications.push({
                 id: `${log.id}-settled`, // Unique ID for the settled event notification
                 type: 'settled',
-                created_at: log.date_settled, // The timestamp of the settlement
+                created_at: log.date_settled, // The timestamp of the settlement (naive string)
                 students: log.students,
                 violation_categories: log.violation_categories,
                 is_read: true, // A settled notification is inherently "read"
                 statusreal: log.statusreal, // Redundant but harmless for this type
+                date_recorded: log.date_recorded // Add date_recorded for consistency, though not used in settled message
               });
             }
+
+            // 3. If the violation is overdue and its due_date is today
+            if (isDueTodayAndUnsettled) {
+                const alreadyAddedAsViolation = generatedNotifications.some(n => n.id === log.id && n.type === 'violation');
+                const alreadyAddedAsSettled = generatedNotifications.some(n => n.id === `${log.id}-settled` && n.type === 'settled');
+                if (!alreadyAddedAsViolation && !alreadyAddedAsSettled) { // Only add if not already covered by a new violation or settled notification
+                    generatedNotifications.push({
+                        id: `${log.id}-overdue`, // Unique ID for overdue event
+                        type: 'overdue',
+                        created_at: log.date_recorded, // Use original recorded date for overdue notification display (naive string)
+                        students: log.students,
+                        violation_categories: log.violation_categories,
+                        is_read: false, // Overdue is by definition not settled
+                        statusreal: log.statusreal,
+                        date_recorded: log.date_recorded // Add date_recorded for overdue message template
+                    });
+                }
+            }
           });
-          // Assign the combined list to notifications. The computed property will then handle final sorting.
+          console.log('Final generatedNotifications array:', generatedNotifications);
           notifications.value = generatedNotifications;
         }
       } catch (err) {
@@ -231,10 +270,13 @@ export default {
           },
           (payload) => {
             console.log('Real-time update received:', payload);
-            // Refresh the data when any change happens to the activity_logs table
             fetchNotifications();
           }
         )
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'foot_counts' }, async payload => {
+          console.log('Foot count change detected:', payload);
+          // For now, no dashboard counts needed here as this is notification page
+        })
         .subscribe();
     };
 
@@ -254,7 +296,7 @@ export default {
         if (refreshCountdown.value <= 0) {
           refreshCountdown.value = 5; // Reset countdown for the 5-second interval
         }
-      }, 5000);
+      }, 1000); // Countdown interval should be 1 second
     };
 
     const manualRefresh = () => {
@@ -266,16 +308,90 @@ export default {
       fetchNotifications();
       subscribeToActivityLogs();
       setupAutoRefresh();
-
-      // Clean up subscription and intervals when component is unmounted
-      onUnmounted(() => {
-        if (supabaseSubscription) {
-          supabase.removeChannel(supabaseSubscription);
-        }
-        if (refreshInterval) clearInterval(refreshInterval);
-        if (countdownInterval) clearInterval(countdownInterval);
-      });
     });
+
+    onUnmounted(() => {
+      if (supabaseSubscription) {
+        supabase.removeChannel(supabaseSubscription);
+      }
+      if (refreshInterval) clearInterval(refreshInterval);
+      if (countdownInterval) clearInterval(countdownInterval);
+    });
+
+    // --- Placeholder/Empty Methods for Dashboard Counts to avoid console errors ---
+    // These are present to make the component self-contained for testing,
+    // but in a real app, you'd likely use a shared store or mixin.
+    const totalFootCount = ref(0);
+    const newViolationCount = ref(0);
+    const activityLogsForDashboardCounts = ref([]); // Needed for calculating dashboard counts
+    const unsettledViolationCountToday = computed(() => {
+        const startOfTodayPHT = moment().tz('Asia/Manila').startOf('day');
+        const endOfTodayPHT = moment().tz('Asia/Manila').endOf('day');
+
+        return activityLogsForDashboardCounts.value.filter(log => {
+            const recordedDatePHT = moment.tz(log.date_recorded, 'Asia/Manila');
+            return !log.statusreal && recordedDatePHT.isBetween(startOfTodayPHT, endOfTodayPHT, null, '[]');
+        }).length;
+    });
+
+    // Stubbed functions for dashboard counts, as they are not the primary focus here
+    const fetchCurrentDayFootCount = async () => {
+      // This implementation needs to fetch 'foot_counts' from Supabase
+      // and update `totalFootCount.value`
+       try {
+        const nowManila = moment().tz('Asia/Manila');
+        const startOfTodayManila = nowManila.clone().startOf('day').add(1, 'minute');
+        const endOfTodayManila = nowManila.clone().endOf('day').subtract(1, 'second');
+
+        const startISO = startOfTodayManila.toISOString();
+        const endISO = endOfTodayManila.toISOString();
+
+        const { data, error } = await supabase
+          .from('foot_counts')
+          .select('count')
+          .gte('timestamp', startISO)
+          .lte('timestamp', endISO);
+
+        if (error) {
+          console.error('Error fetching current day foot count:', error);
+        } else {
+          totalFootCount.value = data.reduce((sum, item) => sum + item.count, 0);
+        }
+      } catch (err) {
+        console.error('Unexpected error fetching foot count:', err);
+      }
+    };
+
+    const fetchActivityLogsForDashboardCounts = async () => {
+      // This implementation needs to fetch relevant 'activity_logs' from Supabase
+      // and update `activityLogsForDashboardCounts.value` and `newViolationCount.value`
+       try {
+            const { data, error } = await supabase
+                .from('activity_logs')
+                .select('id, date_recorded, statusreal');
+
+            if (error) {
+                console.error('Error fetching activity logs for dashboard counts:', error);
+            } else {
+                activityLogsForDashboardCounts.value = data;
+                calculateDashboardCounts();
+            }
+        } catch (err) {
+            console.error('Unexpected error fetching activity logs for dashboard counts:', err);
+        }
+    };
+
+    const calculateDashboardCounts = () => {
+        const startOfTodayPHT = moment().tz('Asia/Manila').startOf('day');
+        const endOfTodayPHT = moment().tz('Asia/Manila').endOf('day');
+
+        newViolationCount.value = activityLogsForDashboardCounts.value.filter(log => {
+            const recordedDatePHT = moment.tz(log.date_recorded, 'Asia/Manila');
+            return recordedDatePHT.isBetween(startOfTodayPHT, endOfTodayPHT, null, '[]');
+        }).length;
+    };
+    // --- End of Placeholder/Empty Methods ---
+
 
     return {
       searchQuery,
@@ -287,7 +403,11 @@ export default {
       loading,
       error,
       refreshCountdown,
-      manualRefresh
+      manualRefresh,
+      // Dashboard counts
+      totalFootCount,
+      newViolationCount,
+      unsettledViolationCountToday,
     };
   },
 };
@@ -432,171 +552,6 @@ export default {
   color: #999;
   padding: 15px;
 }
-</style>
-
-<style scoped>
-.notifications-container {
-  font-family: sans-serif;
-  padding: 20px;
-}
-
-.notifications-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 20px;
-}
-
-.notifications-header h1 {
-  margin: 0;
-}
-
-.actions {
-  display: flex;
-  gap: 20px;
-  align-items: center;
-}
-
-.search-bar input {
-  padding: 8px;
-  border: 1px solid #ccc;
-  border-radius: 4px;
-}
-
-.header-controls {
-  display: flex;
-  gap: 20px;
-  align-items: center;
-}
-
-.mark-actions {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-
-.mark-actions select,
-.mark-actions button {
-  padding: 8px;
-  border: 1px solid #ccc;
-  border-radius: 4px;
-  cursor: pointer;
-}
-
-.mark-actions button:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-.sort-by {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-}
-
-.sort-by select {
-  padding: 8px;
-  border: 1px solid #ccc;
-  border-radius: 4px;
-}
-
-.refresh-info {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  font-size: 0.9em;
-}
-
-.refresh-button {
-  padding: 6px 12px;
-  background-color: #f0f0f0;
-  border: 1px solid #ccc;
-  border-radius: 4px;
-  cursor: pointer;
-  font-size: 0.9em;
-  transition: background-color 0.2s;
-}
-
-.refresh-button:hover {
-  background-color: #e0e0e0;
-}
-
-.notifications-list {
-  list-style: none;
-  padding: 0;
-}
-
-.notification-item {
-  background-color: #f9f9f9;
-  border: 1px solid #eee;
-  border-radius: 4px;
-  padding: 15px;
-  margin-bottom: 10px;
-  display: flex;
-  justify-content: space-between;
-  align-items: center; /* Align content and actions vertically */
-}
-
-.notification-content {
-  flex-grow: 1; /* Allow content to take up more space */
-  margin-right: 10px; /* Space between content and actions */
-}
-
-.notification-item.new {
-  border-left: 5px solid #007bff; /* Example for new violations */
-}
-
-.notification-item.settled {
-  border-left: 5px solid #28a745; /* Example for settled violations */
-}
-
-.notification-item.overdue {
-  border-left: 5px solid #dc3545; /* Example for overdue violations */
-}
-
-.notification-item.read {
-  background-color: #f0f0f0; /* Example styling for read notifications */
-  color: #777;
-}
-
-.notification-item.read .user-name,
-.notification-item.read .violation {
-  font-weight: normal;
-  font-style: normal;
-  color: #777;
-}
-
-.user-name {
-  font-weight: bold;
-}
-
-.violation {
-  font-style: italic;
-}
-
-.date {
-  color: #777;
-}
-
-.action-button {
-  background: none;
-  border: none;
-  color: blue;
-  cursor: pointer;
-  padding: 0;
-  text-decoration: underline;
-}
-
-.empty-message {
-  text-align: center;
-  color: #999;
-}
-
-.loading-message {
-  text-align: center;
-  color: #999;
-  padding: 15px;
-}
 
 .notification-actions button {
   padding: 8px 12px;
@@ -606,6 +561,4 @@ export default {
   font-size: 0.9em;
   margin-left: 5px;
 }
-
-
 </style>

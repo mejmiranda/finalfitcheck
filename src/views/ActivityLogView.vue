@@ -207,8 +207,9 @@ export default {
   methods: {
     formatDate(isoString) {
       if (!isoString) return '';
-      // Parse as UTC, then convert to PHT for display
-      return moment.utc(isoString).tz('Asia/Manila').format('YYYY-MM-DD h:mm:ss A');
+      // Change: Let moment intelligently parse the ISO string first, then convert to PHT
+      // This handles cases where 'isoString' might include 'Z' for UTC or a timezone offset
+      return moment(isoString).tz('Asia/Manila').format('YYYY-MM-DD h:mm:ss A');
     },
     async fetchCurrentDayFootCount() {
       try {
@@ -279,14 +280,13 @@ export default {
       this.modalImageUrl = log.image_url || require('@/assets/studentpic.png');
     },
     showModal(violation) {
-      if (violation && violation.image_url) {
-        this.modalImageUrl = violation.image_url;
-        this.isModalVisible = true;
-      } else {
-        console.warn('Image URL is missing or invalid for modal. Using fallback image.');
-        this.modalImageUrl = require('@/assets/studentpic.png');
-        this.isModalVisible = true;
-      }
+      // Ensure 'violation' object is passed, not just image_url
+      const imageUrl = violation && violation.image_url
+                       ? violation.image_url
+                       : require('@/assets/studentpic.png'); // Fallback if no valid image_url
+      
+      this.modalImageUrl = imageUrl;
+      this.isModalVisible = true;
     },
     closeModal() {
       this.isModalVisible = false;

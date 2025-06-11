@@ -24,6 +24,10 @@
         <img src="@/assets/reportsicon.png" alt="Reports Icon" class="icon" />
         Reports
       </router-link>
+      <router-link to="/noviolation" :class="{ active: $route.path.startsWith('/noviolation') }">
+        <img src="@/assets/shirt.png" alt="Shirt Icon" class="icon" />
+        No Violation
+      </router-link>
       <button @click="handleLogout" class="logout-button" style="margin-top: 20px;">
         <img src="@/assets/logout.png" alt="Logout Icon" class="icon" />
         Logout
